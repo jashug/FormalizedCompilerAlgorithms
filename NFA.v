@@ -26,7 +26,10 @@ Record NFA : Type := {
   finals : StateSet.t;
   next : state -> CharMap.t StateSet.t;
 }.
-(* The set of reachable states should be finite *)
+(*
+The set of reachable states should be finite to capture true finite automata.
+Consider next : StateMap.t (CharMap.t StateSet.t), with not-found -> empty map.
+*)
 
 Definition find_states sym nfa m :=
   match CharMap.find sym (nfa.(next) m) with
