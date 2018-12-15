@@ -208,6 +208,7 @@ Definition compile (r : regex CharSet.t) : NFA :=
   let initial_transitions := transition_map_of_letter_set (p r) in
   let joint_transitions :=
     StateMap.add start_state initial_transitions transitions in
+  (* Consider using StateMap.map flatten_transitions joint_transitions *)
   let next s := match StateMap.find s joint_transitions with
     | Some cm => flatten_transitions cm
     | None => CharMap.empty _

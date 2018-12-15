@@ -5,6 +5,7 @@ From Coq Require Import FSets FMaps FMapAVL OrderedTypeEx.
 
 Definition state := Z.
 
+(* Some proofs left as axioms; fill in later *)
 Module Char_as_UOT <: UsualOrderedType.
 Definition t := ascii.
 Definition eq := @eq t.
