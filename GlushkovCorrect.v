@@ -106,38 +106,30 @@ Fixpoint fold_left_inc_in {A B} {P : A -> Prop} {e : B -> B -> Prop}
          (match_emp_l f _ s2 mfs2 H2))
      end. *)
 
-Definition finals_d r first : StateSet.t :=
-  if l r then StateSet.add first (positions (d r))
-  else positions (d r).
-
-Definition if_l_first_final r i first (ar := (annotate_helper i r).(fst))
-  : l ar = true ->
-    StateSet.In first (finals_d (annotate_helper i r).(fst) first)
-  := fun H => match eq_sym H in _ = b
-     return StateSet.In first (if b then _ else _)
-     with eq_refl => StateSet.add_1 _ eq_refl end.
-Definition d_in_finals r i first (ar := (annotate_helper i r).(fst))
-  : forall lt, LetterSet.S.In lt (d ar) ->
-    StateSet.In lt.(snd) (finals_d (annotate_helper i r).(fst) first)
-  := fun lt H =>
-     let H' : StateSet.In lt.(snd) (positions (d ar)) :=
-       match eq_sym (LetterSet.S.fold_1 (d ar) _ _) in _ = ss
-       return StateSet.In lt.(snd) ss with eq_refl =>
-         fold_left_inc_in (P := StateSet.In lt.(snd)) _ _ _
-           (fun ss lt H => StateSet.add_2 _ H)
-           _ (fun ss lt e => StateSet.add_1 ss (eq_sym e))
-           (LetterSet.S.elements_1 H)
-       end in
-     match l ar as b
-     return StateSet.In lt.(snd) (if b then _ else _)
-     with true => StateSet.add_2 _ H' | false => H' end.
-
-Axiom Admit : forall {T}, T.
-
-Axiom LetterSet_prod_inc : forall lt1 lt2 ls1 ls2,
+Definition LetterSet_prod_inc lt1 lt2 ls1 ls2 :
   LetterSet.S.In lt1 ls1 -> LetterSet.S.In lt2 ls2 ->
-  Letter2Set.S.In (lt1 , lt2) (ls1 <*> ls2).
+  Letter2Set.S.In (lt1 , lt2) (ls1 <*> ls2) :=
+  fun H1 H2 =>
+  match eq_sym (LetterSet.S.fold_1 ls1 _ _) in _ = res1
+  return Letter2Set.S.In (lt1 , lt2) res1
+  with eq_refl =>
+    fold_left_inc_in (P := Letter2Set.S.In (lt1 , lt2)) _ _ _
+    (fun s1 _ H => Letter2Set.S.union_3 _ H)
+    _ (fun _ lt1' lt1eq => Letter2Set.S.union_2 _
+      match eq_sym (LetterSet.S.fold_1 ls2 _ _) in _ = res2
+      return Letter2Set.S.In (lt1 , lt2) res2
+      with eq_refl =>
+        fold_left_inc_in (P := Letter2Set.S.In (lt1 , lt2)) _ _ _
+        (fun _ _ H => Letter2Set.S.union_3 _ H)
+        _ (fun _ lt2' lt2eq => Letter2Set.S.union_2 _
+           (Letter2Set.S.singleton_2 (x := (lt1' , lt2')) (y := (lt1 , lt2))
+            (conj (eq_sym lt1eq) (eq_sym lt2eq))))
+        (LetterSet.S.elements_1 H2)
+      end)
+    (LetterSet.S.elements_1 H1)
+  end.
 
+(* Consider changing around to exists lt, NFA_path /\ (empty \/ in d) *)
 Definition regex_match_to_path_result r i s next first : Prop :=
   let ar := (annotate_helper i r).(fst) in
   (l ar = true /\ EmptyString = s) \/
@@ -158,7 +150,11 @@ Definition regex_match_to_path_result_weaken r1 r2 i1 i2 s next first
        (ex_intro _ lt (conj (H2 lt lt_d) path))
      end.
 
-Axiom string_app_emp : forall s : string, s = (s ++ "")%string.
+Fixpoint string_app_emp (s : string) : s = (s ++ "")%string :=
+  match s with
+  | EmptyString => eq_refl
+  | String c s' => f_equal (String c) (string_app_emp s')
+  end.
 
 Definition regex_match_to_path_result_compose :
   forall r1 r2 r3 i1 i2 i3 s1 s2 next first,
@@ -283,13 +279,95 @@ Fixpoint regex_match_to_path (r : regex CharSet.t) (i : Z) (s : string)
       Be
   end.
 
+(* definable in terms of finals_iff below *)
+Definition finals_d r first : StateSet.t :=
+  if l r then StateSet.add first (positions (d r))
+  else positions (d r).
+Definition if_l_first_final r i first (ar := (annotate_helper i r).(fst))
+  : l ar = true ->
+    StateSet.In first (finals_d (annotate_helper i r).(fst) first)
+  := fun H => match eq_sym H in _ = b
+     return StateSet.In first (if b then _ else _)
+     with eq_refl => StateSet.add_1 _ eq_refl end.
+Definition d_in_finals r i first (ar := (annotate_helper i r).(fst))
+  : forall lt, LetterSet.S.In lt (d ar) ->
+    StateSet.In lt.(snd) (finals_d (annotate_helper i r).(fst) first)
+  := fun lt H =>
+     let H' : StateSet.In lt.(snd) (positions (d ar)) :=
+       match eq_sym (LetterSet.S.fold_1 (d ar) _ _) in _ = ss
+       return StateSet.In lt.(snd) ss with eq_refl =>
+         fold_left_inc_in (P := StateSet.In lt.(snd)) _ _ _
+           (fun ss lt H => StateSet.add_2 _ H)
+           _ (fun ss lt e => StateSet.add_1 ss (eq_sym e))
+           (LetterSet.S.elements_1 H)
+       end in
+     match l ar as b
+     return StateSet.In lt.(snd) (if b then _ else _)
+     with true => StateSet.add_2 _ H' | false => H' end.
+
+Axiom Admit : forall {T}, T.
+
+(* characterize final states and transitions: *)
+(* more annoying than anything: make sure these work for the reverse direction
+   before proving (the directions are reversed from goal) *)
+Axiom finals_iff : forall r state,
+  StateSet.In state (compile r).(finals) <->
+  (exists cs, LetterSet.S.In (cs , state) (d (annotate r))) \/
+  (l (annotate r) = true /\ state = 0).
+
+Axiom transitions_iff : forall r st1 st2 c,
+  StateSet.In st2 (find_default ((compile r).(next) st1) c) <->
+  (exists cs1 cs2,
+   Letter2Set.S.In ((cs1 , st1) , (cs2 , st2)) (f_ (annotate r)) /\
+   CharSet.In c cs2) \/
+  (exists cs2,
+   LetterSet.S.In (cs2 , st2) (p (annotate r)) /\
+   CharSet.In c cs2 /\
+   st1 = 0).
+
+(* definable from transitions_iff *)
+(* Definition compile_all_first_letters r
+    lt (H1 : LetterSet.S.In lt (p (annotate r)))
+    c (H2 : CharSet.In c lt.(fst))
+  : StateSet.In lt.(snd) (find_states c (compile r) 0) :=
+  match eq_sym (StateMap.find_1 (StateMap.add_1 _ _ eq_refl)) in _ = found
+  return
+    StateSet.In lt.(snd)
+    (match CharMap.find c
+     (match found with
+      | Some ss => flatten_transitions ss
+      | None => CharMap.empty _
+      end)
+     with Some ss => ss | None => StateSet.empty end)
+  with eq_refl =>
+    Admit
+    : StateSet.In (snd lt)
+      match CharMap.find c
+        (flatten_transitions (transition_map_of_letter_set (p (annotate r))))
+      with
+      | Some ss => ss
+      | None => StateSet.empty
+      end
+  end. *)
+(* as an example *)
+Definition compile_all_first_letters' r
+    lt (H1 : LetterSet.S.In lt (p (annotate r)))
+    c (H2 : CharSet.In c lt.(fst))
+  : StateSet.In lt.(snd) (find_states c (compile r) 0) :=
+  proj2 (transitions_iff r 0 lt.(snd) c) (or_intror
+    (ex_intro _ lt.(fst) (conj
+      (match lt
+       return LetterSet.S.In lt _ -> LetterSet.S.In (fst lt , snd lt) _
+       with pair cs st => fun H => H end H1)
+      (conj H2 eq_refl)))).
+
 Definition regex_match_to_path' r s (m : regex_match r s)
   : exists last : state,
     StateSet.In last (finals_d (annotate r) 0) /\
     NFA_path (compile r).(next) s 0 last
   := let B :=
        regex_match_to_path r 1 s (compile r).(next) 0 m
-       Admit(* transitions to all first letters *)
+       (compile_all_first_letters' r)
        Admit(* transitions on all of f *)
      in match B with
      | or_introl (conj r_emp s_emp) => match s_emp with eq_refl =>
@@ -308,6 +386,8 @@ Definition regex_match_path_from_zero_iff
   fun r s => conj
     (regex_match_to_path' r s)
     Admit(* reverse direction: induction on regex? *).
+
+(* for reverse, induct on regex, splitting path by where it hits d *)
 
 (* easy *)
 Axiom compiled_NFA_path_zero_iff
