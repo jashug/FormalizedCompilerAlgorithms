@@ -10,6 +10,12 @@ Open Scope Z_scope.
 From CompilerOrg Require Import NFA Regex.
 Import LetterSet.Notation Letter2Set.Notation.
 
+(* p should match the left hand side of H and not the right, gives any type *)
+Local Notation "'discriminate' p H" :=
+  (match H in _ = x return match x with p => True | _ => _ end
+   with eq_refl => I end)
+  (at level 10, p pattern).
+
 (*
 Here we prove that compile : regex CharSet.t -> NFA produces
 an automaton that recognizes the same language as the input regex.
@@ -33,6 +39,134 @@ Inductive regex_match : regex CharSet.t -> string -> Prop :=
 (* This is our goal: *)
 Definition Glushkov_is_correct : Prop :=
   forall r s, regex_match r s <-> accept (compile r) s = true.
+
+(* ---------------------- Linear languages ---------------------- *)
+
+Axiom Admit : forall {T}, T.
+
+Fixpoint linear_inner
+  (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst))
+  (s : string) (first : Letter.t) : Prop :=
+  match s with
+  | EmptyString => LetterSet.S.In first (d ar)
+  | String c s => exists mid : Letter.t,
+    Letter2Set.S.In (first , mid) (f_ ar) /\
+    linear_inner r i s mid
+  end.
+
+Definition linear_match
+  (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst))
+  (s : string) : Prop :=
+  match s with
+  | EmptyString => l ar = true
+  | String c s => exists mid : Letter.t,
+    LetterSet.S.In mid (p ar) /\
+    linear_inner r i s mid
+  end.
+
+(* Lemmas showing that linear_match is closed under regular operations *)
+
+Definition linear_match_emp_dest i s : ~ linear_match Empty i s
+  := match s return linear_match Empty i s -> False with
+     | EmptyString => fun H : false = true => discriminate false H
+     | String c s => fun '(ex_intro _ _ (conj H _)) => LetterSet.S.empty_1 H
+     end.
+
+Definition linear_match_eps_intro i : linear_match Eps i EmptyString :=
+  eq_refl.
+Definition linear_match_eps_dest i s :
+  linear_match Eps i s -> EmptyString = s :=
+  Admit.
+
+Definition linear_match_char_intro i cs c (c_in_cs : CharSet.In c cs) :
+  linear_match (Char cs) i (String c EmptyString) :=
+  ex_intro _ (cs , i) (conj (LetterSet.S.singleton_2 eq_refl)
+                            (LetterSet.S.singleton_2 eq_refl)).
+Definition linear_match_char_dest i cs s :
+  linear_match (Char cs) i s ->
+  exists c, CharSet.In c cs /\ String c EmptyString = s :=
+  Admit.
+
+Definition linear_match_alt_introl e f i s :
+  linear_match e i s -> linear_match (Alt e f) i s :=
+  Admit.
+Definition linear_match_alt_intror e f i s :
+  linear_match f (annotate_helper i e).(snd) s -> linear_match (Alt e f) i s :=
+  Admit.
+Definition linear_match_alt_dest e f i s :
+  linear_match (Alt e f) i s ->
+  linear_match e i s \/ linear_match f (annotate_helper i e).(snd) s :=
+  Admit.
+
+Definition linear_match_seq_intro e f i s1 s2 :
+  linear_match e i s1 -> linear_match f (annotate_helper i e).(snd) s2 ->
+  linear_match (Seq e f) i (s1 ++ s2) :=
+  Admit.
+Definition linear_match_seq_dest e f i s :
+  linear_match (Seq e f) i s ->
+  exists s1 s2, (s1 ++ s2)%string = s /\
+  (linear_match e i s1 /\ linear_match f (annotate_helper i e).(snd) s2) :=
+  Admit.
+
+Definition linear_match_star_intro_emp e i :
+  linear_match (Star e) i EmptyString :=
+  eq_refl.
+Definition linear_match_star_intro_more e i s1 s2 :
+  linear_match e i s1 -> linear_match (Star e) i s2 ->
+  linear_match (Star e) i (s1 ++ s2) :=
+  Admit.
+Definition linear_match_star_ind e i s
+  (P : string -> Prop)
+  (IH_emp : P EmptyString)
+  (IH_more : forall s1 s2, linear_match e i s1 -> P s2 -> P (s1 ++ s2)%string) :
+  linear_match (Star e) i s -> P s :=
+  Admit.
+
+Fixpoint regex_match_to_linear_match (r : regex CharSet.t) (i : Z) (s : string)
+  (m : regex_match r s) : linear_match r i s :=
+  match m with
+  | mEps => linear_match_eps_intro i
+  | mChar cs c c_in_cs => linear_match_char_intro i cs c c_in_cs
+  | mAltl e f s mes => linear_match_alt_introl e f i s
+    (regex_match_to_linear_match e _ s mes)
+  | mAltr e f s mfs => linear_match_alt_intror e f i s
+    (regex_match_to_linear_match f _ s mfs)
+  | mSeq e f s1 s2 mes1 mfs2 => linear_match_seq_intro e f i s1 s2
+    (regex_match_to_linear_match e _ s1 mes1)
+    (regex_match_to_linear_match f _ s2 mfs2)
+  | mStar_emp e => linear_match_star_intro_emp e i
+  | mStar_more e s1 s2 mes1 mses2 => linear_match_star_intro_more e i s1 s2
+    (regex_match_to_linear_match e _ s1 mes1)
+    (regex_match_to_linear_match (Star e) _ s2 mses2)
+  end.
+
+Fixpoint linear_match_to_regex_match (r : regex CharSet.t) (i : Z) (s : string)
+  : linear_match r i s -> regex_match r s :=
+  match r with
+  | Empty => fun H => match linear_match_emp_dest i s H with end
+  | Eps => fun H => match linear_match_eps_dest i s H with eq_refl => mEps end
+  | Char cs => fun H => match linear_match_char_dest i cs s H with
+    | ex_intro _ c (conj c_in_cs s_is_c) => match s_is_c with eq_refl =>
+      mChar cs c c_in_cs
+    end end
+  | Alt e f => fun H => match linear_match_alt_dest e f i s H with
+    | or_introl mes => mAltl e f s (linear_match_to_regex_match e _ s mes)
+    | or_intror mfs => mAltr e f s (linear_match_to_regex_match f _ s mfs)
+    end
+  | Seq e f => fun H => match linear_match_seq_dest e f i s H with
+    | ex_intro _ s1 (ex_intro _ s2 (conj s_eq (conj mes1 mfs2))) =>
+      match s_eq with eq_refl =>
+        mSeq e f s1 s2
+        (linear_match_to_regex_match e _ s1 mes1)
+        (linear_match_to_regex_match f _ s2 mfs2)
+    end end
+  | Star e => linear_match_star_ind e i s (regex_match (Star e))
+    (mStar_emp e)
+    (fun s1 s2 mes1 => mStar_more e s1 s2
+     (linear_match_to_regex_match e _ s1 mes1))
+  end.
+
+(* ---------------------- Proof below ---------------------- *)
 
 Definition find_default (cm : CharMap.t StateSet.t) (key : ascii) : StateSet.t
   := match CharMap.find key cm with
@@ -85,7 +219,8 @@ Fixpoint fold_left_inc_in {A B} {P : A -> Prop} {e : B -> B -> Prop}
   : (s1 ++ s2)%string = EmptyString -> s1 = EmptyString /\ s2 = EmptyString
   := match s1 with
      | EmptyString => fun H => conj eq_refl H
-     | String _ _ => fun (H : String _ _ = EmptyString) => ltac:(congruence)
+     | String _ _ => fun (H : String _ _ = EmptyString) =>
+       discriminate (String _ _) H
      end. *)
 
 (* Fixpoint match_emp_l r i s (m : regex_match r s)
@@ -94,7 +229,7 @@ Fixpoint fold_left_inc_in {A B} {P : A -> Prop} {e : B -> B -> Prop}
      return s = EmptyString -> l (annotate_helper i r).(fst) = true
      with
      | mEps | mStar_more _ _ _ _ _ | mStar_emp _ => fun _ => eq_refl
-     | mChar cs c _ => fun X => ltac:(congruence)
+     | mChar cs c _ => fun X => discriminate (String _ _) X
      | mAltl e _ s me => fun H => orb_true_intro _ _
        (or_introl (match_emp_l e i s me H))
      | mAltr _ f s mf => fun H => orb_true_intro _ _
@@ -305,8 +440,6 @@ Definition d_in_finals r i first (ar := (annotate_helper i r).(fst))
      return StateSet.In lt.(snd) (if b then _ else _)
      with true => StateSet.add_2 _ H' | false => H' end.
 
-Axiom Admit : forall {T}, T.
-
 (* characterize final states and transitions: *)
 (* more annoying than anything: make sure these work for the reverse direction
    before proving (the directions are reversed from goal) *)
@@ -350,7 +483,7 @@ Axiom transitions_iff : forall r st1 st2 c,
       end
   end. *)
 (* as an example *)
-Definition compile_all_first_letters' r
+Definition compile_all_first_letters r
     lt (H1 : LetterSet.S.In lt (p (annotate r)))
     c (H2 : CharSet.In c lt.(fst))
   : StateSet.In lt.(snd) (find_states c (compile r) 0) :=
@@ -363,11 +496,11 @@ Definition compile_all_first_letters' r
 
 Definition regex_match_to_path' r s (m : regex_match r s)
   : exists last : state,
-    StateSet.In last (finals_d (annotate r) 0) /\
+    StateSet.In last (compile r).(finals) /\
     NFA_path (compile r).(next) s 0 last
   := let B :=
        regex_match_to_path r 1 s (compile r).(next) 0 m
-       (compile_all_first_letters' r)
+       (compile_all_first_letters r)
        Admit(* transitions on all of f *)
      in match B with
      | or_introl (conj r_emp s_emp) => match s_emp with eq_refl =>
@@ -376,6 +509,53 @@ Definition regex_match_to_path' r s (m : regex_match r s)
      | or_intror (ex_intro _ lt (conj lt_d path)) =>
        ex_intro _ lt.(snd) (conj (d_in_finals r 1 0 lt lt_d) path)
      end.
+
+(* ---------------------- NFA -> regex ---------------------- *)
+
+Definition in_range (r : regex CharSet.t) (i : Z) (s : state) :=
+  i <= s /\ s < (annotate_helper i r).(snd).
+
+Fixpoint NFA_path_by_f_to_d
+  (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst)) (s : string)
+  (next : state -> CharMap.t StateSet.t) (first : Letter.t) : Prop :=
+  match s with
+  | EmptyString => LetterSet.S.In first (d ar)
+  | String c s => exists mid : Letter.t,
+    StateSet.In mid.(snd) (find_default (next first.(snd)) c) /\
+    Letter2Set.S.In (first , mid) (f_ ar) /\
+    NFA_path_by_f_to_d r i s next mid
+  end.
+
+(* This defines a linear language *)
+Definition faithful_NFA_path
+  (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst)) (s : string)
+  (next : state -> CharMap.t StateSet.t) (first : state) : Prop :=
+  match s with
+  | EmptyString => l ar = true
+  | String c s => exists mid : Letter.t,
+    StateSet.In mid.(snd) (find_default (next first) c) /\
+    LetterSet.S.In mid (p ar) /\
+    NFA_path_by_f_to_d r i s next mid
+  end.
+
+Fixpoint path_to_regex_match (r : regex CharSet.t) (i : Z) (s : string)
+    (next : state -> CharMap.t StateSet.t) (first : state)
+    :
+    (* have steps from first land in p, and successive steps land in f, for
+       steps in_range *)
+    let ar := (annotate_helper i r).(fst) in
+    regex_match_to_path_result r i s next first ->
+    (* restrict right branch to be nonempty and have all following nodes in_range *)
+    (* or move the step condition here? *)
+    regex_match r s :=
+  match r with
+  | Empty => Admit(* impossible precondition *)
+  | Eps => Admit(* s must be empty, since d is empty *)
+  | Char cs => Admit(* can't be empty, since not l, so path ending in d, transitions give exactly on step *)
+  | Alt e f => Admit(* if empty, that's fine. otherwise, look at first step, and discriminate by that *)
+  | Seq e f => Admit(* split by where first enters f (uses a p e <*> d f transition *)
+  | Star e => Admit(* split where uses a p e <*> d e transition *)
+  end.
 
 (* This is the hard one *)
 Definition regex_match_path_from_zero_iff
