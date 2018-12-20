@@ -40,7 +40,7 @@ Inductive regex_match : regex CharSet.t -> string -> Prop :=
 Definition Glushkov_is_correct : Prop :=
   forall r s, regex_match r s <-> accept (compile r) s = true.
 
-(* ---------------------- Linear languages ---------------------- *)
+(* ---------------------- Local languages ---------------------- *)
 
 Fixpoint string_app_emp (s : string) : s = (s ++ "")%string :=
   match s with
@@ -174,75 +174,100 @@ Definition In_annotate_exclusion {A Γ} {e f : regex Γ} {i x}
   end
   with end.
 
-Inductive linear_step
+Fixpoint unique_fst_in_annotate {Γ} (r : regex Γ) i (lt : Γ * state) cs'
+  : In_regex (annotate_helper i r).(fst) lt ->
+    In_regex (annotate_helper i r).(fst) (cs' , lt.(snd)) ->
+    lt = (cs' , lt.(snd))
+  := 
+     match r with
+     | Empty | Eps => fun H => match H with end
+     | Char y => fun H1 H2 => eq_trans (eq_sym H1) H2
+     | Alt e f | Seq e f => fun H1 H2 => match H1 , H2 with
+       | or_introl H1 , or_introl H2 =>
+         unique_fst_in_annotate e i lt cs' H1 H2
+       | or_intror H1 , or_intror H2 =>
+         unique_fst_in_annotate f _ lt cs' H1 H2
+       | or_introl H1 , or_intror H2 =>
+         let H : False
+          := proj2 (In_bounded e _ _ H1) (proj1 (In_bounded f _ _ H2)) in
+         match H with end
+       | or_intror H1 , or_introl H2 =>
+         let H : False
+          := proj2 (In_bounded e _ _ H2) (proj1 (In_bounded f _ _ H1)) in
+         match H with end
+       end
+     | Star e => unique_fst_in_annotate e i lt cs'
+     end.
+
+Inductive local_step
   (c : ascii) (P : Letter.t -> Prop) (Q : Letter.t -> Prop) : Prop :=
-| step : forall mid, CharSet.In c mid.(fst) -> P mid -> Q mid -> linear_step.
+| step : forall mid, CharSet.In c mid.(fst) -> P mid -> Q mid -> local_step.
 Arguments step {c P Q} mid _ _ _.
 
-Fixpoint linear_inner
+Fixpoint local_inner
   (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst))
   (s : string) (first : Letter.t) : Prop :=
   match s with
   | EmptyString => In_d ar first
-  | String c s => linear_step c (In_f ar first) (linear_inner r i s)
+  | String c s => local_step c (In_f ar first) (local_inner r i s)
   end.
 
-Definition linear_match
+Definition local_match
   (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst))
   (s : string) : Prop :=
   match s with
   | EmptyString => l ar = true
-  | String c s => linear_step c (In_p ar) (linear_inner r i s)
+  | String c s => local_step c (In_p ar) (local_inner r i s)
   end.
 
-(* Lemmas constructing linear_match *)
+(* Lemmas constructing local_match *)
 
-Definition linear_match_eps_intro i : linear_match Eps i EmptyString :=
+Definition local_match_eps_intro i : local_match Eps i EmptyString :=
   eq_refl.
 
-Definition linear_match_char_intro i cs c (c_in_cs : CharSet.In c cs) :
-  linear_match (Char cs) i (String c EmptyString) :=
+Definition local_match_char_intro i cs c (c_in_cs : CharSet.In c cs) :
+  local_match (Char cs) i (String c EmptyString) :=
   step (cs , i) c_in_cs eq_refl eq_refl.
 
 (* matches are stable under language subsets *)
-Definition linear_inner_weaken r1 r2 i1 i2
+Definition local_inner_weaken r1 r2 i1 i2
   (ar1 := (annotate_helper i1 r1).(fst)) (ar2 := (annotate_helper i2 r2).(fst))
   (IHd : forall lt, In_d ar1 lt -> In_d ar2 lt)
   (IHf : forall lt1 lt2, In_f ar1 lt1 lt2 -> In_f ar2 lt1 lt2)
-  : forall s first, linear_inner r1 i1 s first -> linear_inner r2 i2 s first :=
+  : forall s first, local_inner r1 i1 s first -> local_inner r2 i2 s first :=
   fix wk s first := match s with
   | EmptyString => IHd first
   | String c s => fun '(step mid c_in_mid first_mid_in_f rest) =>
     step mid c_in_mid (IHf first mid first_mid_in_f) (wk s mid rest)
   end.
-Definition linear_match_weaken r1 r2 i1 i2
+Definition local_match_weaken r1 r2 i1 i2
   (ar1 := (annotate_helper i1 r1).(fst)) (ar2 := (annotate_helper i2 r2).(fst))
   (IHl : l ar1 = true -> l ar2 = true)
   (IHp : forall lt, In_p ar1 lt -> In_p ar2 lt)
   (IHd : forall lt, In_d ar1 lt -> In_d ar2 lt)
   (IHf : forall lt1 lt2, In_f ar1 lt1 lt2 -> In_f ar2 lt1 lt2)
-  : forall s, linear_match r1 i1 s -> linear_match r2 i2 s :=
+  : forall s, local_match r1 i1 s -> local_match r2 i2 s :=
   fun s => match s with
   | EmptyString => IHl
   | String c s => fun '(step mid c_in_mid mid_in_p rest) =>
     step mid c_in_mid (IHp mid mid_in_p)
-    (linear_inner_weaken r1 r2 i1 i2 IHd IHf s mid rest)
+    (local_inner_weaken r1 r2 i1 i2 IHd IHf s mid rest)
   end.
 
-Definition linear_match_alt_introl e f i s :
-  linear_match e i s -> linear_match (Alt e f) i s :=
-  linear_match_weaken e (Alt e f) _ _
+Definition local_match_alt_introl e f i s :
+  local_match e i s -> local_match (Alt e f) i s :=
+  local_match_weaken e (Alt e f) _ _
   (fun le => orb_true_intro _ _ (or_introl le))
   (fun lt H => or_introl H) (fun lt H => or_introl H)
   (fun lt1 lt2 H => or_introl H) s.
-Definition linear_match_alt_intror e f i s :
-  linear_match f (annotate_helper i e).(snd) s -> linear_match (Alt e f) i s :=
-  linear_match_weaken f (Alt e f) _ _
+Definition local_match_alt_intror e f i s :
+  local_match f (annotate_helper i e).(snd) s -> local_match (Alt e f) i s :=
+  local_match_weaken f (Alt e f) _ _
   (fun lf => orb_true_intro _ _ (or_intror lf))
   (fun lt H => or_intror H) (fun lt H => or_intror H)
   (fun lt1 lt2 H => or_intror H) s.
 
-Definition linear_match_compose e f g i1 i2 i3 s1 s2
+Definition local_match_compose e f g i1 i2 i3 s1 s2
   (ae := (annotate_helper i1 e).(fst)) (af := (annotate_helper i2 f).(fst))
   (ag := (annotate_helper i3 g).(fst))
   (IHl : l ae && l af = true -> l ag = true)
@@ -250,14 +275,14 @@ Definition linear_match_compose e f g i1 i2 i3 s1 s2
   (IHd : forall lt, (l af = true /\ In_d ae lt) \/ In_d af lt -> In_d ag lt)
   (IHf : forall lt1 lt2, (In_f ae lt1 lt2 \/ In_f af lt1 lt2) \/
                          (In_d ae lt1 /\ In_p af lt2) -> In_f ag lt1 lt2) :
-  linear_match e i1 s1 -> linear_match f i2 s2 ->
-  linear_match g i3 (s1 ++ s2) :=
+  local_match e i1 s1 -> local_match f i2 s2 ->
+  local_match g i3 (s1 ++ s2) :=
   match s1
   return
-    linear_match e i1 s1 -> linear_match f i2 s2 ->
-    linear_match g i3 (s1 ++ s2)
+    local_match e i1 s1 -> local_match f i2 s2 ->
+    local_match g i3 (s1 ++ s2)
   with
-  | EmptyString => fun e_emp => linear_match_weaken f g i2 i3
+  | EmptyString => fun e_emp => local_match_weaken f g i2 i3
     (fun f_emp => IHl (andb_true_intro (conj e_emp f_emp)))
     (fun lt H => IHp lt (or_intror (conj e_emp H)))
     (fun lt H => IHd lt (or_intror H))
@@ -265,26 +290,26 @@ Definition linear_match_compose e f g i1 i2 i3 s1 s2
   | String c1 s1 => fun '(step mid c_in_mid mid_in_pe rest1) mfs2 =>
     step mid c_in_mid (IHp mid (or_introl mid_in_pe))
     (match s2
-     return linear_match f _ s2 -> linear_inner g i3 (s1 ++ s2) mid
+     return local_match f _ s2 -> local_inner g i3 (s1 ++ s2) mid
      with
      | EmptyString => fun f_emp =>
        match string_app_emp s1 in _ = s1'
-       return linear_inner g i3 s1' mid
+       return local_inner g i3 s1' mid
        with eq_refl =>
-         linear_inner_weaken e g _ _
+         local_inner_weaken e g _ _
          (fun lt H => IHd lt (or_introl (conj f_emp H)))
          (fun lt1 lt2 H => IHf lt1 lt2 (or_introl (or_introl H)))
          s1 mid rest1
        end
      | String c2 s2 => fun '(step mid2 c2_in_mid2 mid2_in_pf rest2) =>
        let fix rec s1 first
-        : linear_inner e i1 s1 first ->
-          linear_inner g i3 (s1 ++ String c2 s2) first
+        : local_inner e i1 s1 first ->
+          local_inner g i3 (s1 ++ String c2 s2) first
         := match s1 with
            | EmptyString => fun first_de =>
              step mid2 c2_in_mid2
              (IHf first mid2 (or_intror (conj first_de mid2_in_pf)))
-             (linear_inner_weaken f g _ _
+             (local_inner_weaken f g _ _
               (fun lt H => IHd lt (or_intror H))
               (fun lt1 lt2 H => IHf lt1 lt2 (or_introl (or_intror H)))
               s2 _ rest2)
@@ -297,19 +322,19 @@ Definition linear_match_compose e f g i1 i2 i3 s1 s2
      end mfs2)
   end.
 
-Definition linear_match_seq_intro e f i s1 s2 :
-  linear_match e i s1 -> linear_match f (annotate_helper i e).(snd) s2 ->
-  linear_match (Seq e f) i (s1 ++ s2) :=
-  linear_match_compose e f (Seq e f) _ _ _ s1 s2
+Definition local_match_seq_intro e f i s1 s2 :
+  local_match e i s1 -> local_match f (annotate_helper i e).(snd) s2 ->
+  local_match (Seq e f) i (s1 ++ s2) :=
+  local_match_compose e f (Seq e f) _ _ _ s1 s2
   (fun H => H) (fun lt H => H) (fun lt H => H) (fun lt1 lt2 H => H).
 
-Definition linear_match_star_intro_emp e i :
-  linear_match (Star e) i EmptyString :=
+Definition local_match_star_intro_emp e i :
+  local_match (Star e) i EmptyString :=
   eq_refl.
-Definition linear_match_star_intro_more e i s1 s2 :
-  linear_match e i s1 -> linear_match (Star e) i s2 ->
-  linear_match (Star e) i (s1 ++ s2) :=
-  linear_match_compose e (Star e) (Star e) i i i s1 s2
+Definition local_match_star_intro_more e i s1 s2 :
+  local_match e i s1 -> local_match (Star e) i s2 ->
+  local_match (Star e) i (s1 ++ s2) :=
+  local_match_compose e (Star e) (Star e) i i i s1 s2
   (fun _ => eq_refl)
   (fun lt H => match H with or_introl H | or_intror (conj _ H) => H end)
   (fun lt H => match H with or_introl (conj _ H) | or_intror H => H end)
@@ -319,42 +344,42 @@ Definition linear_match_star_intro_more e i s1 s2 :
    | or_intror H => or_intror H
    end).
 
-Fixpoint regex_match_to_linear_match (r : regex CharSet.t) (i : Z) (s : string)
-  (m : regex_match r s) : linear_match r i s :=
+Fixpoint regex_match_to_local_match (r : regex CharSet.t) (i : Z) (s : string)
+  (m : regex_match r s) : local_match r i s :=
   match m with
-  | mEps => linear_match_eps_intro i
-  | mChar cs c c_in_cs => linear_match_char_intro i cs c c_in_cs
-  | mAltl e f s mes => linear_match_alt_introl e f i s
-    (regex_match_to_linear_match e _ s mes)
-  | mAltr e f s mfs => linear_match_alt_intror e f i s
-    (regex_match_to_linear_match f _ s mfs)
-  | mSeq e f s1 s2 mes1 mfs2 => linear_match_seq_intro e f i s1 s2
-    (regex_match_to_linear_match e _ s1 mes1)
-    (regex_match_to_linear_match f _ s2 mfs2)
-  | mStar_emp e => linear_match_star_intro_emp e i
-  | mStar_more e s1 s2 mes1 mses2 => linear_match_star_intro_more e i s1 s2
-    (regex_match_to_linear_match e _ s1 mes1)
-    (regex_match_to_linear_match (Star e) _ s2 mses2)
+  | mEps => local_match_eps_intro i
+  | mChar cs c c_in_cs => local_match_char_intro i cs c c_in_cs
+  | mAltl e f s mes => local_match_alt_introl e f i s
+    (regex_match_to_local_match e _ s mes)
+  | mAltr e f s mfs => local_match_alt_intror e f i s
+    (regex_match_to_local_match f _ s mfs)
+  | mSeq e f s1 s2 mes1 mfs2 => local_match_seq_intro e f i s1 s2
+    (regex_match_to_local_match e _ s1 mes1)
+    (regex_match_to_local_match f _ s2 mfs2)
+  | mStar_emp e => local_match_star_intro_emp e i
+  | mStar_more e s1 s2 mes1 mses2 => local_match_star_intro_more e i s1 s2
+    (regex_match_to_local_match e _ s1 mes1)
+    (regex_match_to_local_match (Star e) _ s2 mses2)
   end.
 
-(* lemmas destructing linear_match *)
+(* lemmas destructing local_match *)
 
-Definition linear_match_emp_dest i s : ~ linear_match Empty i s
-  := match s return linear_match Empty i s -> False with
+Definition local_match_emp_dest i s : ~ local_match Empty i s
+  := match s return local_match Empty i s -> False with
      | EmptyString => fun H : false = true => discriminate false H
      | String c s => fun '(step _ _ H _) =>
        match H with end
      end.
 
-Definition linear_match_eps_dest i s :
-  linear_match Eps i s -> EmptyString = s :=
+Definition local_match_eps_dest i s :
+  local_match Eps i s -> EmptyString = s :=
   match s with
   | EmptyString => fun _ => eq_refl
   | String c s => fun '(step mid _ H _) => match H with end
   end.
 
-Definition linear_match_char_dest i cs s :
-  linear_match (Char cs) i s ->
+Definition local_match_char_dest i cs s :
+  local_match (Char cs) i s ->
   exists c, CharSet.In c cs /\ String c EmptyString = s :=
   match s with
   | EmptyString => fun H => discriminate false H
@@ -369,26 +394,26 @@ Definition linear_match_char_dest i cs s :
   end.
 
 
-Fixpoint linear_inner_strip r1 r2 i1 i2 s first
+Fixpoint local_inner_strip r1 r2 i1 i2 s first
   (ar1 := (annotate_helper i1 r1).(fst)) (ar2 := (annotate_helper i2 r2).(fst))
   (first_in_r2 : In_regex ar2 first)
   (IHd : forall lt, In_regex ar2 lt -> In_d ar1 lt -> In_d ar2 lt)
   (IHf : forall lt1 lt2, In_regex ar2 lt1 -> In_f ar1 lt1 lt2 ->
          In_f ar2 lt1 lt2) :
-  linear_inner r1 i1 s first -> linear_inner r2 i2 s first :=
-  match s return linear_inner r1 i1 s first -> linear_inner r2 i2 s first with
+  local_inner r1 i1 s first -> local_inner r2 i2 s first :=
+  match s return local_inner r1 i1 s first -> local_inner r2 i2 s first with
   | EmptyString => IHd first first_in_r2
   | String c s => fun '(step mid c_in_mid first_mid_f rest) =>
     let first_mid_r2 : In_f ar2 first mid
      := IHf first mid first_in_r2 first_mid_f in
     step mid c_in_mid first_mid_r2
-    (linear_inner_strip r1 r2 i1 i2 s mid
+    (local_inner_strip r1 r2 i1 i2 s mid
      (proj2 (In_f_all first_mid_r2)) IHd IHf rest)
   end.
-Fixpoint linear_inner_alt_destl e f i s first
+Fixpoint local_inner_alt_destl e f i s first
   (ae := (annotate_helper i e).(fst)) (first_in_e : In_regex ae first) :
-  linear_inner (Alt e f) i s first -> linear_inner e i s first :=
-  linear_inner_strip (Alt e f) e _ _ s first first_in_e
+  local_inner (Alt e f) i s first -> local_inner e i s first :=
+  local_inner_strip (Alt e f) e _ _ s first first_in_e
   (fun lt lt_in_r2 lt_in_d1 => match lt_in_d1 with
    | or_introl l_in_de => l_in_de
    | or_intror l_in_df => In_annotate_exclusion lt_in_r2 (In_d_all l_in_df)
@@ -398,12 +423,12 @@ Fixpoint linear_inner_alt_destl e f i s first
    | or_intror lt1_lt2_in_ff => In_annotate_exclusion
      lt1_in_r2 (proj1 (In_f_all lt1_lt2_in_ff))
    end).
-Fixpoint linear_inner_alt_destr e f i s first
+Fixpoint local_inner_alt_destr e f i s first
   (af := (annotate_helper (annotate_helper i e).(snd) f).(fst))
   (first_in_f : In_regex af first) :
-  linear_inner (Alt e f) i s first ->
-  linear_inner f (annotate_helper i e).(snd) s first :=
-  linear_inner_strip (Alt e f) f _ _ s first first_in_f
+  local_inner (Alt e f) i s first ->
+  local_inner f (annotate_helper i e).(snd) s first :=
+  local_inner_strip (Alt e f) f _ _ s first first_in_f
   (fun lt lt_in_r2 lt_in_d1 => match lt_in_d1 with
    | or_introl l_in_de => In_annotate_exclusion (In_d_all l_in_de) lt_in_r2
    | or_intror l_in_df => l_in_df
@@ -413,13 +438,13 @@ Fixpoint linear_inner_alt_destr e f i s first
      (proj1 (In_f_all lt1_lt2_in_fe)) lt1_in_r2
    | or_intror lt1_lt2_in_ff => lt1_lt2_in_ff
    end).
-Definition linear_match_alt_dest e f i s :
-  linear_match (Alt e f) i s ->
-  linear_match e i s \/ linear_match f (annotate_helper i e).(snd) s :=
+Definition local_match_alt_dest e f i s :
+  local_match (Alt e f) i s ->
+  local_match e i s \/ local_match f (annotate_helper i e).(snd) s :=
   match s
   return
-    linear_match (Alt e f) i s ->
-    linear_match e i s \/ linear_match f (annotate_helper i e).(snd) s
+    local_match (Alt e f) i s ->
+    local_match e i s \/ local_match f (annotate_helper i e).(snd) s
   with
   | EmptyString => fun H => match orb_prop _ _ H with
     | or_introl e_emp => or_introl e_emp
@@ -429,19 +454,19 @@ Definition linear_match_alt_dest e f i s :
     match mid_in_p with
     | or_introl mid_in_pe => or_introl
       (step mid c_in_mid mid_in_pe
-       (linear_inner_alt_destl e f i s mid (In_p_all mid_in_pe) rest))
+       (local_inner_alt_destl e f i s mid (In_p_all mid_in_pe) rest))
     | or_intror mid_in_pf => or_intror
       (step mid c_in_mid mid_in_pf
-       (linear_inner_alt_destr e f i s mid (In_p_all mid_in_pf) rest))
+       (local_inner_alt_destr e f i s mid (In_p_all mid_in_pf) rest))
     end
   end.
 
-Definition linear_match_seq_destr e f i s mid :
+Definition local_match_seq_destr e f i s mid :
   In_p (fst (annotate_helper (snd (annotate_helper i e)) f)) mid ->
-  linear_inner (Seq e f) i s mid ->
-  linear_inner f (snd (annotate_helper i e)) s mid :=
+  local_inner (Seq e f) i s mid ->
+  local_inner f (snd (annotate_helper i e)) s mid :=
   fun mid_in_pf =>
-  linear_inner_strip (Seq e f) f i _ s mid (In_p_all mid_in_pf)
+  local_inner_strip (Seq e f) f i _ s mid (In_p_all mid_in_pf)
   (fun lt lt_in_f lt_in_d => match lt_in_d with
    | or_introl (conj _ lt_in_de) => In_annotate_exclusion
      (In_d_all lt_in_de) lt_in_f
@@ -454,10 +479,10 @@ Definition linear_match_seq_destr e f i s mid :
    | or_intror (conj lt1_in_de lt2_in_pf) => In_annotate_exclusion
      (In_d_all lt1_in_de) lt1_in_f
    end).
-Definition linear_match_seq_dest e f i s :
-  linear_match (Seq e f) i s ->
+Definition local_match_seq_dest e f i s :
+  local_match (Seq e f) i s ->
   exists s1 s2, (s1 ++ s2)%string = s /\
-  (linear_match e i s1 /\ linear_match f (annotate_helper i e).(snd) s2) :=
+  (local_match e i s1 /\ local_match f (annotate_helper i e).(snd) s2) :=
   match s with
   | EmptyString => fun ef_emp => ex_intro _ EmptyString (ex_intro _ EmptyString
     (conj eq_refl (andb_prop _ _ ef_emp)))
@@ -466,10 +491,10 @@ Definition linear_match_seq_dest e f i s :
     | or_introl mid_in_pe =>
       let fix rec s first
           (first_in_e : In_regex (annotate_helper i e).(fst) first)
-        : linear_inner (Seq e f) i s first ->
+        : local_inner (Seq e f) i s first ->
         exists s1 s2, (s1 ++ s2)%string = s /\
-        (linear_inner e i s1 first /\
-         linear_match f (annotate_helper i e).(snd) s2)
+        (local_inner e i s1 first /\
+         local_match f (annotate_helper i e).(snd) s2)
        := match s with
        | EmptyString => fun first_d => match first_d with
          | or_introl (conj f_emp first_de) =>
@@ -493,7 +518,7 @@ Definition linear_match_seq_dest e f i s :
            ex_intro _ EmptyString (ex_intro _ (String c1 s1)
              (conj eq_refl (conj first_de
               (step mid c1_in_mid mid_pf
-               (linear_match_seq_destr e f i s1 mid mid_pf rest)))))
+               (local_match_seq_destr e f i s1 mid mid_pf rest)))))
          end
        end in
       let '(ex_intro _ s1 (ex_intro _ s2 (conj seq (conj me mf))))
@@ -503,19 +528,19 @@ Definition linear_match_seq_dest e f i s :
     | or_intror (conj e_emp mid_in_pf) =>
       ex_intro _ EmptyString (ex_intro _ (String c s) (conj eq_refl (conj e_emp
         (step mid c_in_mid mid_in_pf
-         (linear_match_seq_destr e f i s mid mid_in_pf rest)))))
+         (local_match_seq_destr e f i s mid mid_in_pf rest)))))
     end
   end.
 
-Definition linear_match_star_ind e i s
+Definition local_match_star_ind e i s
   (ae := (annotate_helper i e).(fst))
   (P : string -> Prop)
   (IH_emp : P EmptyString)
-  (IH_more : forall s1 s2, linear_match e i s1 -> P s2 -> P (s1 ++ s2)%string)
-  : linear_match (Star e) i s -> P s :=
+  (IH_more : forall s1 s2, local_match e i s1 -> P s2 -> P (s1 ++ s2)%string)
+  : local_match (Star e) i s -> P s :=
   let fix ind_inner s first
-   : linear_inner (Star e) i s first ->
-     exists s1 s2, (s1 ++ s2)%string = s /\ (linear_inner e i s1 first /\ P s2)
+   : local_inner (Star e) i s first ->
+     exists s1 s2, (s1 ++ s2)%string = s /\ (local_inner e i s1 first /\ P s2)
    := match s with
    | EmptyString => fun first_in_d =>
      ex_intro _ EmptyString (ex_intro _ EmptyString
@@ -536,7 +561,7 @@ Definition linear_match_star_ind e i s
          (IH_more (String c s1) s2 (step mid c_in_mid mid_in_pe s1_rest) s2P))))
      end
    end in
-  match s return linear_match (Star e) i s -> P s with
+  match s return local_match (Star e) i s -> P s with
   | EmptyString => fun _ => IH_emp
   | String c s => fun '(step mid c_in_mid mid_in_pe rest) =>
     let '(ex_intro _ s1 (ex_intro _ s2 (conj seq (conj s1_rest s2P))))
@@ -546,39 +571,90 @@ Definition linear_match_star_ind e i s
     match seq with eq_refl => H end
   end.
 
-Fixpoint linear_match_to_regex_match (r : regex CharSet.t) (i : Z) (s : string)
-  : linear_match r i s -> regex_match r s :=
+Fixpoint local_match_to_regex_match (r : regex CharSet.t) (i : Z) (s : string)
+  : local_match r i s -> regex_match r s :=
   match r with
-  | Empty => fun H => match linear_match_emp_dest i s H with end
-  | Eps => fun H => match linear_match_eps_dest i s H with eq_refl => mEps end
-  | Char cs => fun H => match linear_match_char_dest i cs s H with
+  | Empty => fun H => match local_match_emp_dest i s H with end
+  | Eps => fun H => match local_match_eps_dest i s H with eq_refl => mEps end
+  | Char cs => fun H => match local_match_char_dest i cs s H with
     | ex_intro _ c (conj c_in_cs s_is_c) => match s_is_c with eq_refl =>
       mChar cs c c_in_cs
     end end
-  | Alt e f => fun H => match linear_match_alt_dest e f i s H with
-    | or_introl mes => mAltl e f s (linear_match_to_regex_match e _ s mes)
-    | or_intror mfs => mAltr e f s (linear_match_to_regex_match f _ s mfs)
+  | Alt e f => fun H => match local_match_alt_dest e f i s H with
+    | or_introl mes => mAltl e f s (local_match_to_regex_match e _ s mes)
+    | or_intror mfs => mAltr e f s (local_match_to_regex_match f _ s mfs)
     end
-  | Seq e f => fun H => match linear_match_seq_dest e f i s H with
+  | Seq e f => fun H => match local_match_seq_dest e f i s H with
     | ex_intro _ s1 (ex_intro _ s2 (conj s_eq (conj mes1 mfs2))) =>
       match s_eq with eq_refl =>
         mSeq e f s1 s2
-        (linear_match_to_regex_match e _ s1 mes1)
-        (linear_match_to_regex_match f _ s2 mfs2)
+        (local_match_to_regex_match e _ s1 mes1)
+        (local_match_to_regex_match f _ s2 mfs2)
     end end
-  | Star e => linear_match_star_ind e i s (regex_match (Star e))
+  | Star e => local_match_star_ind e i s (regex_match (Star e))
     (mStar_emp e)
     (fun s1 s2 mes1 => mStar_more e s1 s2
-     (linear_match_to_regex_match e _ s1 mes1))
+     (local_match_to_regex_match e _ s1 mes1))
   end.
 
-Definition regex_match_iff_linear_match r i s :
-  regex_match r s <-> linear_match r i s :=
-  conj (regex_match_to_linear_match r i s) (linear_match_to_regex_match r i s).
+Definition regex_match_iff_local_match r i s :
+  regex_match r s <-> local_match r i s :=
+  conj (regex_match_to_local_match r i s) (local_match_to_regex_match r i s).
 
-Axiom Admit : forall {T}, T.
+(* ---------------------- NFA paths ---------------------- *)
 
-(* ---------------------- Proof below ---------------------- *)
+(* Fixpoint local_match_to_NFA_accept r s (cur : StateSet.t) (start : state)
+  (start_in_cur : StateSet.In start cur)
+  : local_match r start s ->
+    let curNFA := {|
+      start := cur;
+      finals := (compile r).(finals);
+      next := (compile r).(next)
+    |} in accept curNFA s = true :=
+  match s with
+  | EmptyString => fun r_emp =>
+    let cur_inter_final := StateSet.inter cur (compile r).(finals) in
+    let H1 : StateSet.In start (compile r).(finals) :=
+      match eq_sym r_emp in _ = b return StateSet.In start (if b then _ else _)
+      with eq_refl => _ end in
+    match StateSet.is_empty cur_inter_final as b
+    return StateSet.is_empty cur_inter_final = b -> negb b = true with
+    | false => fun _ => eq_refl
+    | true => fun H =>
+      match StateSet.is_empty_2 H (StateSet.inter_3 start_in_cur H1) with end
+    end eq_refl
+  | String c s => _
+  end. *)
+
+Check I.
+
+(* 
+
+Definition local_match_iff_NFA_accept r s :
+  local_match r 1 s <-> accept (compile r) s = true :=
+  match s return local_match r 1 s <-> accept (compile r) s = true with
+  | EmptyString => iff_trans
+    (conj
+     (fun r_emp => ex_intro _ 0 (conj
+      (StateSet.singleton_2 eq_refl)
+      (Admit(* if_l_first_final below *))))
+     (fun '(ex_intro _ st (conj st_in_s0 st_in_finals)) =>
+      match StateSet.singleton_1 st_in_s0 in _ = st
+      return StateSet.In st (compile r).(finals) -> l (annotate r) = true
+      with eq_refl =>
+        match l (annotate r) as b
+        return StateSet.In 0 (if b then _ else _) -> b = true
+        with
+        | true => fun _ => eq_refl
+        | false => fun H => Admit(* 0 not in positions (d (annotate r)) *)
+        end
+      end st_in_finals))
+    (accept_emp_iff_some_cur_state_final r (StateSet.singleton 0))
+  | String c s => conj
+    (fun '(step mid c_in_mid mid_in_p rest) =>
+     _)
+    (Admit)
+  end. *)
 
 Definition find_default (cm : CharMap.t StateSet.t) (key : ascii) : StateSet.t
   := match CharMap.find key cm with
@@ -587,27 +663,28 @@ Definition find_default (cm : CharMap.t StateSet.t) (key : ascii) : StateSet.t
      end.
 
 (* Go through NFA_path_accept *)
-Fixpoint NFA_path (next : state -> CharMap.t StateSet.t) (s : string)
-    (first last : state) : Prop :=
+Fixpoint NFA_path
+    (next : state -> CharMap.t StateSet.t) (finals : StateSet.t) (s : string)
+    (first : state) : Prop :=
   match s with
-  | EmptyString => first = last
+  | EmptyString => StateSet.In first finals
   | String c s => exists mid : state,
       StateSet.In mid (find_default (next first) c) /\
-      NFA_path next s mid last
+      NFA_path next finals s mid
   end.
-Fixpoint NFA_path_compose next s1 s2 first mid last
+(* Fixpoint NFA_path_compose next s1 s2 first mid last
   : NFA_path next s1 first mid -> NFA_path next s2 mid last ->
     NFA_path next (s1 ++ s2) first last :=
   match s1 with
   | EmptyString => fun 'eq_refl p2 => p2
   | String c s => fun '(ex_intro _ mid (conj P p1)) p2 =>
     ex_intro _ mid (conj P (NFA_path_compose _ _ _ _ _ _ p1 p2))
-  end.
-Definition NFA_path_accept (n : NFA) (s : string) : Prop :=
+  end. *)
+(* Definition NFA_path_accept (n : NFA) (s : string) : Prop :=
   exists (first last : state),
   StateSet.In first n.(start) /\
   StateSet.In last n.(finals) /\
-  NFA_path n.(next) s first last.
+  NFA_path n.(next) s first last. *)
 
 Fixpoint fold_left_inc {A B} {P : A -> Prop}
   (f : A -> B -> A) (l : list B) (i : A)
@@ -626,32 +703,6 @@ Fixpoint fold_left_inc_in {A B} {P : A -> Prop} {e : B -> B -> Prop}
      | InA_cons_hd l H => fold_left_inc _ _ _ IH (IH2 _ _ H)
      | InA_cons_tl y H' => fold_left_inc_in f _ _ IH b IH2 H'
      end.
-
-(* Definition string_app_eq_emp_split (s1 s2 : string)
-  : (s1 ++ s2)%string = EmptyString -> s1 = EmptyString /\ s2 = EmptyString
-  := match s1 with
-     | EmptyString => fun H => conj eq_refl H
-     | String _ _ => fun (H : String _ _ = EmptyString) =>
-       discriminate (String _ _) H
-     end. *)
-
-(* Fixpoint match_emp_l r i s (m : regex_match r s)
-  : s = EmptyString -> l (annotate_helper i r).(fst) = true
-  := match m in regex_match r s
-     return s = EmptyString -> l (annotate_helper i r).(fst) = true
-     with
-     | mEps | mStar_more _ _ _ _ _ | mStar_emp _ => fun _ => eq_refl
-     | mChar cs c _ => fun X => discriminate (String _ _) X
-     | mAltl e _ s me => fun H => orb_true_intro _ _
-       (or_introl (match_emp_l e i s me H))
-     | mAltr _ f s mf => fun H => orb_true_intro _ _
-       (or_intror (match_emp_l f _ s mf H))
-     | mSeq e f s1 s2 mes1 mfs2 => fun H =>
-       let '(conj H1 H2) := string_app_eq_emp_split s1 s2 H in
-       andb_true_intro (conj
-         (match_emp_l e i s1 mes1 H1)
-         (match_emp_l f _ s2 mfs2 H2))
-     end. *)
 
 Definition LetterSet_prod_inc lt1 lt2 ls1 ls2 :
   LetterSet.S.In lt1 ls1 -> LetterSet.S.In lt2 ls2 ->
@@ -674,150 +725,6 @@ Definition LetterSet_prod_inc lt1 lt2 ls1 ls2 :
         (LetterSet.S.elements_1 H2)
       end)
     (LetterSet.S.elements_1 H1)
-  end.
-
-(* Consider changing around to exists lt, NFA_path /\ (empty \/ in d) *)
-Definition regex_match_to_path_result r i s next first : Prop :=
-  let ar := (annotate_helper i r).(fst) in
-  (l ar = true /\ EmptyString = s) \/
-  (exists lt : Letter.t,
-   LetterSet.S.In lt (d ar) /\
-   NFA_path next s first lt.(snd)).
-
-Definition regex_match_to_path_result_weaken r1 r2 i1 i2 s next first
-  : let ar1 := (annotate_helper i1 r1).(fst) in
-    let ar2 := (annotate_helper i2 r2).(fst) in
-    (l ar1 = true -> l ar2 = true) ->
-    (forall lt, LetterSet.S.In lt (d ar1) -> LetterSet.S.In lt (d ar2)) ->
-    regex_match_to_path_result r1 i1 s next first ->
-    regex_match_to_path_result r2 i2 s next first
-  := fun H1 H2 B => match B with
-     | or_introl (conj r1_emp s_emp) => or_introl (conj (H1 r1_emp) s_emp)
-     | or_intror (ex_intro _ lt (conj lt_d path)) => or_intror
-       (ex_intro _ lt (conj (H2 lt lt_d) path))
-     end.
-
-Definition regex_match_to_path_result_compose :
-  forall r1 r2 r3 i1 i2 i3 s1 s2 next first,
-  let ar1 := (annotate_helper i1 r1).(fst) in
-  let ar2 := (annotate_helper i2 r2).(fst) in
-  let ar3 := (annotate_helper i3 r3).(fst) in
-  (l ar1 = true -> l ar2 = true -> l ar3 = true) ->
-  (forall lt, l ar2 = true -> LetterSet.S.In lt (d ar1) ->
-   LetterSet.S.In lt (d ar3)) ->
-  (forall lt, LetterSet.S.In lt (d ar2) -> LetterSet.S.In lt (d ar3)) ->
-  (l ar1 = true -> regex_match_to_path_result r2 i2 s2 next first) ->
-  (forall lt, LetterSet.S.In lt (d ar1) ->
-   regex_match_to_path_result r2 i2 s2 next lt.(snd)) ->
-  regex_match_to_path_result r1 i1 s1 next first ->
-  regex_match_to_path_result r3 i3 (s1 ++ s2) next first :=
-  fun r1 r2 r3 i1 i2 i3 s1 s2 next first H1 H2 H3 A1 A2 B =>
-  match B with
-  | or_introl (conj r1_emp s1_emp) => match s1_emp with eq_refl =>
-    let B2 : regex_match_to_path_result r2 i2 s2 next first := A1 r1_emp in
-    regex_match_to_path_result_weaken r2 r3 i2 i3 s2 next first
-      (H1 r1_emp) H3 B2
-    end
-  | or_intror (ex_intro _ lt (conj lt_d path1)) =>
-    let B2 : regex_match_to_path_result r2 i2 s2 next lt.(snd) := A2 lt lt_d in
-    match B2 with
-    | or_introl (conj r2_emp s2_emp) => match s2_emp with eq_refl =>
-      match string_app_emp s1 in _ = s1'
-      return regex_match_to_path_result r3 i3 s1' next first
-      with eq_refl => or_intror (ex_intro _ lt (conj
-        (H2 lt r2_emp lt_d)
-        path1)) : regex_match_to_path_result r3 i3 s1 next first
-      end end
-    | or_intror (ex_intro _ lt2 (conj lt2_d path2)) =>
-      or_intror (ex_intro _ lt2 (conj
-        (H3 lt2 lt2_d)
-        (NFA_path_compose _ _ _ _ _ _ path1 path2)))
-    end
-  end.
-
-(* forward direction *)
-Fixpoint regex_match_to_path (r : regex CharSet.t) (i : Z) (s : string)
-    (next : state -> CharMap.t StateSet.t) (first : state)
-    (m : regex_match r s)
-    :
-    let ar := (annotate_helper i r).(fst) in
-    (forall lt, LetterSet.S.In lt (p ar) -> forall c, CharSet.In c lt.(fst) ->
-     StateSet.In lt.(snd) (find_default (next first) c)) ->
-    (forall lt1 lt2, Letter2Set.S.In (lt1 , lt2) (f_ ar) ->
-     forall c, CharSet.In c lt2.(fst) ->
-     StateSet.In lt2.(snd) (find_default (next lt1.(snd)) c)) ->
-    regex_match_to_path_result r i s next first :=
-  match m
-  with
-  | mEps => fun H1 H2 => or_introl (conj eq_refl eq_refl)
-  | mChar cs c c_in_cs => fun H1 H2 =>
-    let A1 : LetterSet.S.In (cs , i) (d (annotate_helper i (Char cs)).(fst))
-     := LetterSet.S.singleton_2 eq_refl in
-    let A2 : StateSet.In i (find_default (next first) c)
-     := H1 (cs , i) A1 c c_in_cs in
-    or_intror (ex_intro _ (cs , i) (conj A1 (ex_intro _ i (conj A2 eq_refl))))
-  | mAltl e f s mes => fun H1 H2 =>
-    let Be : regex_match_to_path_result e i s next first
-     := regex_match_to_path e i s next first mes
-        (fun lt A => H1 lt (LetterSet.S.union_2 _ A))
-        (fun lt1 lt2 A => H2 lt1 lt2 (Letter2Set.S.union_2 _ A)) in
-    regex_match_to_path_result_weaken e (Alt e f) i i s next first
-    (fun e_emp => orb_true_intro _ _ (or_introl e_emp))
-    (fun lt lt_d => LetterSet.S.union_2 _ lt_d)
-    Be
-  | mAltr e f s mfs => fun H1 H2 =>
-    let Bf : regex_match_to_path_result f _ s next first
-     := regex_match_to_path f (annotate_helper i e).(snd) s next first mfs
-        (fun lt A => H1 lt (LetterSet.S.union_3 _ A))
-        (fun lt1 lt2 A => H2 lt1 lt2 (Letter2Set.S.union_3 _ A)) in
-    regex_match_to_path_result_weaken f (Alt e f) _ i s next first
-    (fun f_emp => orb_true_intro _ _ (or_intror f_emp))
-    (fun lt lt_d => LetterSet.S.union_3 _ lt_d)
-    Bf
-  | mSeq e f s1 s2 mes1 mfs2 => fun H1 H2 =>
-    let Be : regex_match_to_path_result e i s1 next first
-     := regex_match_to_path e i s1 next first mes1
-        (fun lt A => H1 lt (LetterSet.S.union_2 _ A))
-        (fun lt1 lt2 A => H2 lt1 lt2
-         (Letter2Set.S.union_2 _ (Letter2Set.S.union_2 _ A))) in
-    regex_match_to_path_result_compose e f (Seq e f) i _ i s1 s2 next first
-      (fun e_emp f_emp => andb_true_intro (conj e_emp f_emp))
-      (fun lt f_emp lt_de => LetterSet.S.union_2 _
-       match eq_sym f_emp in _ = b return LetterSet.S.In _ (if b then _ else _)
-       with eq_refl => lt_de end)
-      (fun lt lt_df => LetterSet.S.union_3 _ lt_df)
-      (fun e_emp =>
-        regex_match_to_path f _ s2 next first mfs2
-            (fun lt lt_in_pf => H1 lt (LetterSet.S.union_3 _
-             match eq_sym e_emp in _ = b
-             return LetterSet.S.In lt (if b then _ else _)
-             with eq_refl => lt_in_pf end))
-            (fun lt1 lt2 A => H2 lt1 lt2
-             (Letter2Set.S.union_2 _ (Letter2Set.S.union_3 _ A))))
-      (fun elast elast_d =>
-        regex_match_to_path f _ s2 next elast.(snd) mfs2
-            (fun lt lt_in_pf => H2 elast lt (Letter2Set.S.union_3 _
-             (LetterSet_prod_inc _ _ _ _ elast_d lt_in_pf)))
-            (fun lt1 lt2 A => H2 lt1 lt2
-             (Letter2Set.S.union_2 _ (Letter2Set.S.union_3 _ A))))
-      Be
-  | mStar_emp e => fun H1 H2 => or_introl _ (conj eq_refl eq_refl)
-  | mStar_more e s1 s2 mes1 mses2 => fun H1 H2 =>
-    let Be : regex_match_to_path_result e i s1 next first
-     := regex_match_to_path e i s1 next first mes1 H1
-        (fun lt1 lt2 A => H2 lt1 lt2 (Letter2Set.S.union_2 _ A)) in
-    regex_match_to_path_result_compose
-      e (Star e) (Star e) i i i s1 s2 next first
-      (fun e_emp f_emp => eq_refl)
-      (fun lt se_emp lt_de => lt_de)
-      (fun lt lt_dse => lt_dse)
-      (fun e_emp => regex_match_to_path (Star e) _ s2 next first mses2 H1 H2)
-      (fun elast elast_d =>
-        regex_match_to_path (Star e) _ s2 next elast.(snd) mses2
-          (fun lt lt_in_pf => H2 elast lt (Letter2Set.S.union_3 _
-           (LetterSet_prod_inc _ _ _ _ elast_d lt_in_pf)))
-          H2)
-      Be
   end.
 
 (* definable in terms of finals_iff below *)
@@ -851,18 +758,91 @@ Definition d_in_finals r i first (ar := (annotate_helper i r).(fst))
    before proving (the directions are reversed from goal) *)
 Axiom finals_iff : forall r state,
   StateSet.In state (compile r).(finals) <->
-  (exists cs, LetterSet.S.In (cs , state) (d (annotate r))) \/
+  (exists cs, In_d (annotate r) (cs , state)) \/
   (l (annotate r) = true /\ state = 0).
 
 Axiom transitions_iff : forall r st1 st2 c,
   StateSet.In st2 (find_default ((compile r).(next) st1) c) <->
   (exists cs1 cs2,
-   Letter2Set.S.In ((cs1 , st1) , (cs2 , st2)) (f_ (annotate r)) /\
+   In_f (annotate r) (cs1 , st1) (cs2 , st2) /\
    CharSet.In c cs2) \/
   (exists cs2,
-   LetterSet.S.In (cs2 , st2) (p (annotate r)) /\
+   In_p (annotate r) (cs2 , st2) /\
    CharSet.In c cs2 /\
    st1 = 0).
+
+Definition expand_pair {A B : Type} {P : A * B -> Type} {p : A * B}
+  : P p -> P (fst p , snd p)
+  := match p with pair a b => fun H => H end.
+
+Definition zero_not_in_annotated {A Γ r cs} : 
+  In_regex (annotate (Γ := Γ) r) (cs , 0) -> A :=
+  fun H => match proj1 (In_bounded r 1 (cs , 0) H) eq_refl with end.
+
+Definition l_final_iff r :
+  StateSet.In 0 (compile r).(finals) <-> l (annotate r) = true :=
+  conj
+  (fun H => match proj1 (finals_iff r 0) H with
+   | or_introl (ex_intro _ cs ind) => zero_not_in_annotated (In_d_all ind)
+   | or_intror (conj r_emp _) => r_emp
+   end)
+  (fun r_emp => proj2 (finals_iff r 0) (or_intror (conj r_emp eq_refl))).
+
+Definition d_final_iff r lt (lt_in_r : In_regex (annotate r) lt) :
+  StateSet.In lt.(snd) (compile r).(finals) <-> In_d (annotate r) lt :=
+  iff_trans (finals_iff r lt.(snd))
+  (conj
+   (fun H => match H with
+    | or_introl (ex_intro _ cs ind) =>
+      match eq_sym (unique_fst_in_annotate r _ lt cs lt_in_r (In_d_all ind))
+      in _ = lt return In_d _ lt with eq_refl => ind end
+    | or_intror (conj _ st0) =>
+      let H : In_regex _ (lt.(fst) , 0)
+       := match st0 in _ = o return In_regex _ (_ , o)
+          with eq_refl => expand_pair lt_in_r end
+      in zero_not_in_annotated H
+    end)
+   (fun ind => or_introl (ex_intro _ lt.(fst)
+    (expand_pair ind : In_d _ (fst lt , snd lt))))).
+
+Definition initial_transitions_iff r st c :
+  StateSet.In st (find_default ((compile r).(next) 0) c) <->
+  (exists cs,
+   In_p (annotate r) (cs , st) /\
+   CharSet.In c cs) :=
+  iff_trans (transitions_iff r 0 st c)
+  (conj
+   (fun H => match H with
+    | or_introl (ex_intro _ cs0 (ex_intro _ _ (conj O_st_f _))) =>
+      zero_not_in_annotated (proj1 (In_f_all O_st_f))
+    | or_intror (ex_intro _ cs (conj inp (conj c_in_cs _))) =>
+      ex_intro _ cs (conj inp c_in_cs)
+    end)
+   (fun '(ex_intro _ cs (conj inp c_in_cs)) => or_intror (ex_intro _ cs
+    (conj inp (conj c_in_cs eq_refl))))).
+
+Definition interior_transitions_iff r lt1 st2 c
+  (lt1_in_r : In_regex (annotate r) lt1) :
+  StateSet.In st2 (find_default ((compile r).(next) lt1.(snd)) c) <->
+  (exists cs2,
+   In_f (annotate r) lt1 (cs2 , st2) /\
+   CharSet.In c cs2) :=
+  iff_trans (transitions_iff r lt1.(snd) st2 c)
+  (conj
+   (fun H => match H with
+    | or_introl (ex_intro _ cs1 (ex_intro _ cs2 (conj inf c_in_cs2))) =>
+      match eq_sym (unique_fst_in_annotate r _ lt1 cs1 lt1_in_r 
+                    (proj1 (In_f_all inf)))
+      in _ = lt return exists cs2, In_f _ lt _ /\ _
+      with eq_refl => ex_intro _ cs2 (conj inf c_in_cs2) end
+    | or_intror (ex_intro _ _ (conj _ (conj _ st1_eq_0))) =>
+      zero_not_in_annotated
+      (match st1_eq_0 in _ = o return In_regex _ (_ , o)
+       with eq_refl => expand_pair lt1_in_r end)
+    end)
+   (fun '(ex_intro _ cs2 (conj inf c_in_cs2)) => or_introl
+    (ex_intro _ lt1.(fst) (ex_intro _ cs2
+     (conj (expand_pair (P := fun lt => In_f _ lt _) inf) c_in_cs2))))).
 
 (* definable from transitions_iff *)
 (* Definition compile_all_first_letters r
@@ -890,109 +870,95 @@ Axiom transitions_iff : forall r st1 st2 c,
   end. *)
 (* as an example *)
 Definition compile_all_first_letters r
-    lt (H1 : LetterSet.S.In lt (p (annotate r)))
+    lt (H1 : In_p (annotate r) lt)
     c (H2 : CharSet.In c lt.(fst))
   : StateSet.In lt.(snd) (find_states c (compile r) 0) :=
   proj2 (transitions_iff r 0 lt.(snd) c) (or_intror
     (ex_intro _ lt.(fst) (conj
-      (match lt
-       return LetterSet.S.In lt _ -> LetterSet.S.In (fst lt , snd lt) _
-       with pair cs st => fun H => H end H1)
+      (expand_pair H1)
       (conj H2 eq_refl)))).
 
-Definition regex_match_to_path' r s (m : regex_match r s)
-  : exists last : state,
-    StateSet.In last (compile r).(finals) /\
-    NFA_path (compile r).(next) s 0 last
-  := let B :=
-       regex_match_to_path r 1 s (compile r).(next) 0 m
-       (compile_all_first_letters r)
-       Admit(* transitions on all of f *)
-     in match B with
-     | or_introl (conj r_emp s_emp) => match s_emp with eq_refl =>
-         ex_intro _ 0 (conj (if_l_first_final r 1 0 r_emp) eq_refl)
-       end
-     | or_intror (ex_intro _ lt (conj lt_d path)) =>
-       ex_intro _ lt.(snd) (conj (d_in_finals r 1 0 lt lt_d) path)
-     end.
+(* Definition accept_emp_iff_some_cur_state_final r cur
+  : (exists st, StateSet.In st cur /\ StateSet.In st (compile r).(finals)) <->
+    negb (StateSet.is_empty (StateSet.inter cur (compile r).(finals))) = true :=
+  conj
+  (fun '(ex_intro _ st (conj H1 H2)) =>
+   match StateSet.is_empty _ as b
+   return StateSet.is_empty _ = b -> negb b = true with
+   | false => fun _ => eq_refl
+   | true => fun H =>
+     match StateSet.is_empty_2 H (StateSet.inter_3 H1 H2) with end
+   end eq_refl)
+  (Admit). *)
 
-(* ---------------------- NFA -> regex ---------------------- *)
-
-Definition in_range (r : regex CharSet.t) (i : Z) (s : state) :=
-  i <= s /\ s < (annotate_helper i r).(snd).
-
-Fixpoint NFA_path_by_f_to_d
-  (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst)) (s : string)
-  (next : state -> CharMap.t StateSet.t) (first : Letter.t) : Prop :=
-  match s with
-  | EmptyString => LetterSet.S.In first (d ar)
-  | String c s => exists mid : Letter.t,
-    StateSet.In mid.(snd) (find_default (next first.(snd)) c) /\
-    Letter2Set.S.In (first , mid) (f_ ar) /\
-    NFA_path_by_f_to_d r i s next mid
+(* easy, if we get the conversions right *)
+Fixpoint local_inner_iff_NFA_path r s start
+  (start_in_r : In_regex (annotate r) start) :
+  local_inner r 1 s start <->
+  NFA_path (compile r).(next) (compile r).(finals) s start.(snd) :=
+  match s
+  return
+    local_inner r 1 s start <->
+    NFA_path (compile r).(next) (compile r).(finals) s start.(snd)
+  with
+  | EmptyString =>
+    iff_sym (d_final_iff r start start_in_r)
+  | String c s => conj
+    (fun '(step mid c_in_mid first_mid_f rest) =>
+     ex_intro _ mid.(snd) (conj
+       (proj2 (interior_transitions_iff r start mid.(snd) c start_in_r)
+        (ex_intro _ mid.(fst) (conj (expand_pair first_mid_f) c_in_mid)))
+       (proj1 (local_inner_iff_NFA_path r s mid
+               (proj2 (In_f_all first_mid_f))) rest)))
+    (fun '(ex_intro _ mid (conj first_mid_trans path)) =>
+     let '(ex_intro _ cs2 (conj inf c_in_cs2))
+      := proj1 (interior_transitions_iff r start mid c start_in_r)
+         first_mid_trans in
+     step (cs2 , mid) c_in_cs2 inf
+       (proj2 (local_inner_iff_NFA_path r s (cs2 , mid) (proj2 (In_f_all inf)))
+        (path : NFA_path _ _ _ mid)))
   end.
-
-(* This defines a linear language *)
-Definition faithful_NFA_path
-  (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst)) (s : string)
-  (next : state -> CharMap.t StateSet.t) (first : state) : Prop :=
-  match s with
-  | EmptyString => l ar = true
-  | String c s => exists mid : Letter.t,
-    StateSet.In mid.(snd) (find_default (next first) c) /\
-    LetterSet.S.In mid (p ar) /\
-    NFA_path_by_f_to_d r i s next mid
+Definition local_match_iff_NFA_path_accept r s :
+  local_match r 1 s <-> NFA_path (compile r).(next) (compile r).(finals) s 0 :=
+  match s
+  return
+    local_match r 1 s <->
+    NFA_path (compile r).(next) (compile r).(finals) s 0
+  with
+  | EmptyString => iff_sym (l_final_iff r)
+  | String c s => conj
+     (fun '(step mid c_in_mid mid_in_p rest) =>
+      ex_intro _ mid.(snd) (conj
+        (proj2 (initial_transitions_iff r mid.(snd) c)
+         (ex_intro _ mid.(fst) (conj (expand_pair mid_in_p) c_in_mid)))
+        (proj1 (local_inner_iff_NFA_path r s mid (In_p_all mid_in_p)) rest)))
+     (fun '(ex_intro _ mid (conj O_to_mid path)) =>
+      let '(ex_intro _ cs (conj mid_in_p c_in_cs))
+       := proj1 (initial_transitions_iff r mid c) O_to_mid in
+      step (cs , mid) c_in_cs mid_in_p
+        (proj2 (local_inner_iff_NFA_path r s (cs , mid) (In_p_all mid_in_p))
+         (path : NFA_path _ _ s mid)))
   end.
-
-Fixpoint path_to_regex_match (r : regex CharSet.t) (i : Z) (s : string)
-    (next : state -> CharMap.t StateSet.t) (first : state)
-    :
-    (* have steps from first land in p, and successive steps land in f, for
-       steps in_range *)
-    let ar := (annotate_helper i r).(fst) in
-    regex_match_to_path_result r i s next first ->
-    (* restrict right branch to be nonempty and have all following nodes in_range *)
-    (* or move the step condition here? *)
-    regex_match r s :=
-  match r with
-  | Empty => Admit(* impossible precondition *)
-  | Eps => Admit(* s must be empty, since d is empty *)
-  | Char cs => Admit(* can't be empty, since not l, so path ending in d, transitions give exactly on step *)
-  | Alt e f => Admit(* if empty, that's fine. otherwise, look at first step, and discriminate by that *)
-  | Seq e f => Admit(* split by where first enters f (uses a p e <*> d f transition *)
-  | Star e => Admit(* split where uses a p e <*> d e transition *)
-  end.
-
-(* This is the hard one *)
-Definition regex_match_path_from_zero_iff
-  : forall r s, regex_match r s <->
-    exists last : state,
-    StateSet.In last (finals_d (annotate r) 0) /\
-    NFA_path (compile r).(next) s 0 last :=
-  fun r s => conj
-    (regex_match_to_path' r s)
-    Admit(* reverse direction: induction on regex? *).
-
-(* for reverse, induct on regex, splitting path by where it hits d *)
 
 (* easy *)
-Axiom compiled_NFA_path_zero_iff
-  : forall r s,
-    (exists last : state,
-     StateSet.In last (compile r).(finals) /\
-     NFA_path (compile r).(next) s 0 last)
-    <->
-    NFA_path_accept (compile r) s.
+Axiom compile_NFA_start_single : forall r s,
+  NFA_path (compile r).(next) (compile r).(finals) s 0 <->
+  exists st, StateSet.In st (compile r).(start) /\
+             NFA_path (compile r).(next) (compile r).(finals) s st.
 
 (* easy *)
 Axiom NFA_accept_path_iff
-  : forall n s, NFA_path_accept n s <-> accept n s = true.
+  : forall n s,
+    (exists st, StateSet.In st n.(start) /\
+     NFA_path n.(next) n.(finals) s st) <->
+    accept n s = true.
 
 (* prove this without any axioms, then we have succeeded. *)
 Definition Glushkov_correct : Glushkov_is_correct :=
   fun r s =>
-  iff_trans (iff_trans
-  (regex_match_path_from_zero_iff r s)
-  (compiled_NFA_path_zero_iff r s))
+  iff_trans (iff_trans (iff_trans
+  (regex_match_iff_local_match r 1 s)
+  (local_match_iff_NFA_path_accept r s))
+  (compile_NFA_start_single r s))
   (NFA_accept_path_iff (compile r) s)
 .
