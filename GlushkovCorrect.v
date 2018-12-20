@@ -42,16 +42,149 @@ Definition Glushkov_is_correct : Prop :=
 
 (* ---------------------- Linear languages ---------------------- *)
 
-Axiom Admit : forall {T}, T.
+Fixpoint string_app_emp (s : string) : s = (s ++ "")%string :=
+  match s with
+  | EmptyString => eq_refl
+  | String c s' => f_equal (String c) (string_app_emp s')
+  end.
+
+(* The definition of equality on letters is too weak to use directly *)
+Definition In_p {Γ} (r : regex Γ) (x : Γ) : Prop :=
+  let fix In_p r := match r with
+  | Empty | Eps => False
+  | Char y => y = x
+  | Alt e f => In_p e \/ In_p f
+  | Seq e f => In_p e \/ (l e = true /\ In_p f)
+  | Star e => In_p e
+  end
+  in In_p r.
+Definition In_d {Γ} (r : regex Γ) (x : Γ) : Prop :=
+  let fix In_d r := match r with
+  | Empty | Eps => False
+  | Char y => y = x
+  | Alt e f => In_d e \/ In_d f
+  | Seq e f => (l f = true /\ In_d e) \/ In_d f
+  | Star e => In_d e
+  end
+  in In_d r.
+Definition In_f {Γ} (r : regex Γ) (x1 x2 : Γ) : Prop :=
+  let fix In_f r := match r with
+  | Empty | Eps | Char _ => False
+  | Alt e f => In_f e \/ In_f f
+  | Seq e f => (In_f e \/ In_f f) \/ (In_d e x1 /\ In_p f x2)
+  | Star e => In_f e \/ (In_d e x1 /\ In_p e x2)
+  end
+  in In_f r.
+
+Definition In_regex {Γ} (r : regex Γ) (x : Γ) : Prop :=
+  let fix In r := match r with
+  | Empty | Eps => False
+  | Char y => y = x
+  | Alt e f | Seq e f => In e \/ In f
+  | Star e => In e
+  end
+  in In r.
+
+Fixpoint In_p_all {Γ} {r : regex Γ} {x : Γ} : In_p r x -> In_regex r x :=
+  match r with
+  | Empty | Eps => fun H => match H with end
+  | Char y => fun H => H
+  | Alt e f => fun H => match H with
+    | or_introl H => or_introl (In_p_all H)
+    | or_intror H => or_intror (In_p_all H)
+    end
+  | Seq e f => fun H => match H with
+    | or_introl H => or_introl (In_p_all H)
+    | or_intror (conj _ H) => or_intror (In_p_all H)
+    end
+  | Star e => In_p_all (r := e)
+  end.
+Fixpoint In_d_all {Γ} {r : regex Γ} {x : Γ} : In_d r x -> In_regex r x :=
+  match r with
+  | Empty | Eps => fun H => match H with end
+  | Char y => fun H => H
+  | Alt e f => fun H => match H with
+    | or_introl H => or_introl (In_d_all H)
+    | or_intror H => or_intror (In_d_all H)
+    end
+  | Seq e f => fun H => match H with
+    | or_introl (conj _ H) => or_introl (In_d_all H)
+    | or_intror H => or_intror (In_d_all H)
+    end
+  | Star e => In_d_all (r := e)
+  end.
+Fixpoint In_f_all {Γ} {r : regex Γ} {x y : Γ} :
+  In_f r x y -> In_regex r x /\ In_regex r y :=
+  match r return In_f r x y -> In_regex r x /\ In_regex r y with
+  | Empty | Eps | Char _ => fun H => match H with end
+  | Alt e f => fun H => match H with
+    | or_introl H => let '(conj Hx Hy) := In_f_all H in
+      conj (or_introl Hx) (or_introl Hy)
+    | or_intror H => let '(conj Hx Hy) := In_f_all H in
+      conj (or_intror Hx) (or_intror Hy)
+    end
+  | Seq e f => fun H => match H with
+    | or_introl (or_introl H) => let '(conj Hx Hy) := In_f_all H in
+      conj (or_introl Hx) (or_introl Hy)
+    | or_introl (or_intror H) => let '(conj Hx Hy) := In_f_all H in
+      conj (or_intror Hx) (or_intror Hy)
+    | or_intror (conj Hx Hy) =>
+      conj (or_introl (In_d_all Hx)) (or_intror (In_p_all Hy))
+    end
+  | Star e => fun H => match H with
+    | or_introl H => In_f_all H
+    | or_intror (conj Hx Hy) => conj (In_d_all Hx) (In_p_all Hy)
+    end
+  end.
+
+Fixpoint annotate_increasing {Γ} (r : regex Γ) i :
+  i <= (annotate_helper i r).(snd) :=
+  match r with
+  | Empty | Eps => Z.le_refl i
+  | Char y => Z.le_succ_diag_r i
+  | Alt e f | Seq e f => Z.le_trans _ _ _
+    (annotate_increasing e _) (annotate_increasing f _)
+  | Star e => annotate_increasing e i
+  end.
+Fixpoint In_bounded {Γ} (r : regex Γ) i x :
+  In_regex (annotate_helper i r).(fst) x ->
+  i <= x.(snd) /\ ~ (annotate_helper i r).(snd) <= x.(snd) :=
+  match r return In_regex (annotate_helper i r).(fst) x ->
+  i <= x.(snd) /\ ~ (annotate_helper i r).(snd) <= x.(snd) with
+  | Empty | Eps => fun H => match H with end
+  | Char y => fun H => match H with eq_refl =>
+      conj (Z.le_refl i) (Z.nle_succ_diag_l i)
+    end
+  | Alt e f | Seq e f => fun H => match H with
+    | or_introl H => let '(conj HL HR) := In_bounded e i x H in
+      conj HL (fun HR' => HR (Z.le_trans _ _ _ (annotate_increasing f _) HR'))
+    | or_intror H => let '(conj HL HR) := In_bounded f _ x H in
+      conj (Z.le_trans _ _ _ (annotate_increasing e i) HL) HR
+    end
+  | Star e => In_bounded e i x
+  end.
+Definition In_annotate_exclusion {A Γ} {e f : regex Γ} {i x}
+  (ae := (annotate_helper i e).(fst))
+  (af := (annotate_helper (annotate_helper i e).(snd) f).(fst)) :
+  In_regex ae x -> In_regex af x -> A :=
+  fun H1 H2 => match
+  match Z.le_decidable (annotate_helper i e).(snd) x.(snd) return False with
+  | or_introl x_past_e => proj2 (In_bounded e i x H1) x_past_e
+  | or_intror x_not_past_e => x_not_past_e (proj1 (In_bounded f _ x H2))
+  end
+  with end.
+
+Inductive linear_step
+  (c : ascii) (P : Letter.t -> Prop) (Q : Letter.t -> Prop) : Prop :=
+| step : forall mid, CharSet.In c mid.(fst) -> P mid -> Q mid -> linear_step.
+Arguments step {c P Q} mid _ _ _.
 
 Fixpoint linear_inner
   (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst))
   (s : string) (first : Letter.t) : Prop :=
   match s with
-  | EmptyString => LetterSet.S.In first (d ar)
-  | String c s => exists mid : Letter.t,
-    Letter2Set.S.In (first , mid) (f_ ar) /\
-    linear_inner r i s mid
+  | EmptyString => In_d ar first
+  | String c s => linear_step c (In_f ar first) (linear_inner r i s)
   end.
 
 Definition linear_match
@@ -59,54 +192,116 @@ Definition linear_match
   (s : string) : Prop :=
   match s with
   | EmptyString => l ar = true
-  | String c s => exists mid : Letter.t,
-    LetterSet.S.In mid (p ar) /\
-    linear_inner r i s mid
+  | String c s => linear_step c (In_p ar) (linear_inner r i s)
   end.
 
-(* Lemmas showing that linear_match is closed under regular operations *)
-
-Definition linear_match_emp_dest i s : ~ linear_match Empty i s
-  := match s return linear_match Empty i s -> False with
-     | EmptyString => fun H : false = true => discriminate false H
-     | String c s => fun '(ex_intro _ _ (conj H _)) => LetterSet.S.empty_1 H
-     end.
+(* Lemmas constructing linear_match *)
 
 Definition linear_match_eps_intro i : linear_match Eps i EmptyString :=
   eq_refl.
-Definition linear_match_eps_dest i s :
-  linear_match Eps i s -> EmptyString = s :=
-  Admit.
 
 Definition linear_match_char_intro i cs c (c_in_cs : CharSet.In c cs) :
   linear_match (Char cs) i (String c EmptyString) :=
-  ex_intro _ (cs , i) (conj (LetterSet.S.singleton_2 eq_refl)
-                            (LetterSet.S.singleton_2 eq_refl)).
-Definition linear_match_char_dest i cs s :
-  linear_match (Char cs) i s ->
-  exists c, CharSet.In c cs /\ String c EmptyString = s :=
-  Admit.
+  step (cs , i) c_in_cs eq_refl eq_refl.
+
+(* matches are stable under language subsets *)
+Definition linear_inner_weaken r1 r2 i1 i2
+  (ar1 := (annotate_helper i1 r1).(fst)) (ar2 := (annotate_helper i2 r2).(fst))
+  (IHd : forall lt, In_d ar1 lt -> In_d ar2 lt)
+  (IHf : forall lt1 lt2, In_f ar1 lt1 lt2 -> In_f ar2 lt1 lt2)
+  : forall s first, linear_inner r1 i1 s first -> linear_inner r2 i2 s first :=
+  fix wk s first := match s with
+  | EmptyString => IHd first
+  | String c s => fun '(step mid c_in_mid first_mid_in_f rest) =>
+    step mid c_in_mid (IHf first mid first_mid_in_f) (wk s mid rest)
+  end.
+Definition linear_match_weaken r1 r2 i1 i2
+  (ar1 := (annotate_helper i1 r1).(fst)) (ar2 := (annotate_helper i2 r2).(fst))
+  (IHl : l ar1 = true -> l ar2 = true)
+  (IHp : forall lt, In_p ar1 lt -> In_p ar2 lt)
+  (IHd : forall lt, In_d ar1 lt -> In_d ar2 lt)
+  (IHf : forall lt1 lt2, In_f ar1 lt1 lt2 -> In_f ar2 lt1 lt2)
+  : forall s, linear_match r1 i1 s -> linear_match r2 i2 s :=
+  fun s => match s with
+  | EmptyString => IHl
+  | String c s => fun '(step mid c_in_mid mid_in_p rest) =>
+    step mid c_in_mid (IHp mid mid_in_p)
+    (linear_inner_weaken r1 r2 i1 i2 IHd IHf s mid rest)
+  end.
 
 Definition linear_match_alt_introl e f i s :
   linear_match e i s -> linear_match (Alt e f) i s :=
-  Admit.
+  linear_match_weaken e (Alt e f) _ _
+  (fun le => orb_true_intro _ _ (or_introl le))
+  (fun lt H => or_introl H) (fun lt H => or_introl H)
+  (fun lt1 lt2 H => or_introl H) s.
 Definition linear_match_alt_intror e f i s :
   linear_match f (annotate_helper i e).(snd) s -> linear_match (Alt e f) i s :=
-  Admit.
-Definition linear_match_alt_dest e f i s :
-  linear_match (Alt e f) i s ->
-  linear_match e i s \/ linear_match f (annotate_helper i e).(snd) s :=
-  Admit.
+  linear_match_weaken f (Alt e f) _ _
+  (fun lf => orb_true_intro _ _ (or_intror lf))
+  (fun lt H => or_intror H) (fun lt H => or_intror H)
+  (fun lt1 lt2 H => or_intror H) s.
+
+Definition linear_match_compose e f g i1 i2 i3 s1 s2
+  (ae := (annotate_helper i1 e).(fst)) (af := (annotate_helper i2 f).(fst))
+  (ag := (annotate_helper i3 g).(fst))
+  (IHl : l ae && l af = true -> l ag = true)
+  (IHp : forall lt, In_p ae lt \/ (l ae = true /\ In_p af lt) -> In_p ag lt)
+  (IHd : forall lt, (l af = true /\ In_d ae lt) \/ In_d af lt -> In_d ag lt)
+  (IHf : forall lt1 lt2, (In_f ae lt1 lt2 \/ In_f af lt1 lt2) \/
+                         (In_d ae lt1 /\ In_p af lt2) -> In_f ag lt1 lt2) :
+  linear_match e i1 s1 -> linear_match f i2 s2 ->
+  linear_match g i3 (s1 ++ s2) :=
+  match s1
+  return
+    linear_match e i1 s1 -> linear_match f i2 s2 ->
+    linear_match g i3 (s1 ++ s2)
+  with
+  | EmptyString => fun e_emp => linear_match_weaken f g i2 i3
+    (fun f_emp => IHl (andb_true_intro (conj e_emp f_emp)))
+    (fun lt H => IHp lt (or_intror (conj e_emp H)))
+    (fun lt H => IHd lt (or_intror H))
+    (fun lt1 lt2 H => IHf lt1 lt2 (or_introl (or_intror H))) s2
+  | String c1 s1 => fun '(step mid c_in_mid mid_in_pe rest1) mfs2 =>
+    step mid c_in_mid (IHp mid (or_introl mid_in_pe))
+    (match s2
+     return linear_match f _ s2 -> linear_inner g i3 (s1 ++ s2) mid
+     with
+     | EmptyString => fun f_emp =>
+       match string_app_emp s1 in _ = s1'
+       return linear_inner g i3 s1' mid
+       with eq_refl =>
+         linear_inner_weaken e g _ _
+         (fun lt H => IHd lt (or_introl (conj f_emp H)))
+         (fun lt1 lt2 H => IHf lt1 lt2 (or_introl (or_introl H)))
+         s1 mid rest1
+       end
+     | String c2 s2 => fun '(step mid2 c2_in_mid2 mid2_in_pf rest2) =>
+       let fix rec s1 first
+        : linear_inner e i1 s1 first ->
+          linear_inner g i3 (s1 ++ String c2 s2) first
+        := match s1 with
+           | EmptyString => fun first_de =>
+             step mid2 c2_in_mid2
+             (IHf first mid2 (or_intror (conj first_de mid2_in_pf)))
+             (linear_inner_weaken f g _ _
+              (fun lt H => IHd lt (or_intror H))
+              (fun lt1 lt2 H => IHf lt1 lt2 (or_introl (or_intror H)))
+              s2 _ rest2)
+           | String c s1 => fun '(step mid c_in_mid first_mid_in_fe rest) =>
+             step mid c_in_mid
+             (IHf first mid (or_introl (or_introl first_mid_in_fe)))
+             (rec s1 mid rest)
+           end in
+       rec s1 mid rest1
+     end mfs2)
+  end.
 
 Definition linear_match_seq_intro e f i s1 s2 :
   linear_match e i s1 -> linear_match f (annotate_helper i e).(snd) s2 ->
   linear_match (Seq e f) i (s1 ++ s2) :=
-  Admit.
-Definition linear_match_seq_dest e f i s :
-  linear_match (Seq e f) i s ->
-  exists s1 s2, (s1 ++ s2)%string = s /\
-  (linear_match e i s1 /\ linear_match f (annotate_helper i e).(snd) s2) :=
-  Admit.
+  linear_match_compose e f (Seq e f) _ _ _ s1 s2
+  (fun H => H) (fun lt H => H) (fun lt H => H) (fun lt1 lt2 H => H).
 
 Definition linear_match_star_intro_emp e i :
   linear_match (Star e) i EmptyString :=
@@ -114,13 +309,15 @@ Definition linear_match_star_intro_emp e i :
 Definition linear_match_star_intro_more e i s1 s2 :
   linear_match e i s1 -> linear_match (Star e) i s2 ->
   linear_match (Star e) i (s1 ++ s2) :=
-  Admit.
-Definition linear_match_star_ind e i s
-  (P : string -> Prop)
-  (IH_emp : P EmptyString)
-  (IH_more : forall s1 s2, linear_match e i s1 -> P s2 -> P (s1 ++ s2)%string) :
-  linear_match (Star e) i s -> P s :=
-  Admit.
+  linear_match_compose e (Star e) (Star e) i i i s1 s2
+  (fun _ => eq_refl)
+  (fun lt H => match H with or_introl H | or_intror (conj _ H) => H end)
+  (fun lt H => match H with or_introl (conj _ H) | or_intror H => H end)
+  (fun lt1 lt2 H => match H with
+   | or_introl (or_introl H) => or_introl H
+   | or_introl (or_intror H) => H
+   | or_intror H => or_intror H
+   end).
 
 Fixpoint regex_match_to_linear_match (r : regex CharSet.t) (i : Z) (s : string)
   (m : regex_match r s) : linear_match r i s :=
@@ -138,6 +335,215 @@ Fixpoint regex_match_to_linear_match (r : regex CharSet.t) (i : Z) (s : string)
   | mStar_more e s1 s2 mes1 mses2 => linear_match_star_intro_more e i s1 s2
     (regex_match_to_linear_match e _ s1 mes1)
     (regex_match_to_linear_match (Star e) _ s2 mses2)
+  end.
+
+(* lemmas destructing linear_match *)
+
+Definition linear_match_emp_dest i s : ~ linear_match Empty i s
+  := match s return linear_match Empty i s -> False with
+     | EmptyString => fun H : false = true => discriminate false H
+     | String c s => fun '(step _ _ H _) =>
+       match H with end
+     end.
+
+Definition linear_match_eps_dest i s :
+  linear_match Eps i s -> EmptyString = s :=
+  match s with
+  | EmptyString => fun _ => eq_refl
+  | String c s => fun '(step mid _ H _) => match H with end
+  end.
+
+Definition linear_match_char_dest i cs s :
+  linear_match (Char cs) i s ->
+  exists c, CharSet.In c cs /\ String c EmptyString = s :=
+  match s with
+  | EmptyString => fun H => discriminate false H
+  | String c EmptyString =>
+    fun '(step mid c_in_mid mid_in_p rest) =>
+    ex_intro _ c (conj
+    match eq_sym mid_in_p in _ = cs return CharSet.In c cs.(fst)
+    with eq_refl => c_in_mid end
+    eq_refl)
+  | String c (String _ _) => fun '(step _ _ _ (step _ _ H _)) =>
+    match H with end
+  end.
+
+
+Fixpoint linear_inner_strip r1 r2 i1 i2 s first
+  (ar1 := (annotate_helper i1 r1).(fst)) (ar2 := (annotate_helper i2 r2).(fst))
+  (first_in_r2 : In_regex ar2 first)
+  (IHd : forall lt, In_regex ar2 lt -> In_d ar1 lt -> In_d ar2 lt)
+  (IHf : forall lt1 lt2, In_regex ar2 lt1 -> In_f ar1 lt1 lt2 ->
+         In_f ar2 lt1 lt2) :
+  linear_inner r1 i1 s first -> linear_inner r2 i2 s first :=
+  match s return linear_inner r1 i1 s first -> linear_inner r2 i2 s first with
+  | EmptyString => IHd first first_in_r2
+  | String c s => fun '(step mid c_in_mid first_mid_f rest) =>
+    let first_mid_r2 : In_f ar2 first mid
+     := IHf first mid first_in_r2 first_mid_f in
+    step mid c_in_mid first_mid_r2
+    (linear_inner_strip r1 r2 i1 i2 s mid
+     (proj2 (In_f_all first_mid_r2)) IHd IHf rest)
+  end.
+Fixpoint linear_inner_alt_destl e f i s first
+  (ae := (annotate_helper i e).(fst)) (first_in_e : In_regex ae first) :
+  linear_inner (Alt e f) i s first -> linear_inner e i s first :=
+  linear_inner_strip (Alt e f) e _ _ s first first_in_e
+  (fun lt lt_in_r2 lt_in_d1 => match lt_in_d1 with
+   | or_introl l_in_de => l_in_de
+   | or_intror l_in_df => In_annotate_exclusion lt_in_r2 (In_d_all l_in_df)
+   end)
+  (fun lt1 lt2 lt1_in_r2 lt1_lt2_in_f1 => match lt1_lt2_in_f1 with
+   | or_introl lt1_lt2_in_fe => lt1_lt2_in_fe
+   | or_intror lt1_lt2_in_ff => In_annotate_exclusion
+     lt1_in_r2 (proj1 (In_f_all lt1_lt2_in_ff))
+   end).
+Fixpoint linear_inner_alt_destr e f i s first
+  (af := (annotate_helper (annotate_helper i e).(snd) f).(fst))
+  (first_in_f : In_regex af first) :
+  linear_inner (Alt e f) i s first ->
+  linear_inner f (annotate_helper i e).(snd) s first :=
+  linear_inner_strip (Alt e f) f _ _ s first first_in_f
+  (fun lt lt_in_r2 lt_in_d1 => match lt_in_d1 with
+   | or_introl l_in_de => In_annotate_exclusion (In_d_all l_in_de) lt_in_r2
+   | or_intror l_in_df => l_in_df
+   end)
+  (fun lt1 lt2 lt1_in_r2 lt1_lt2_in_f1 => match lt1_lt2_in_f1 with
+   | or_introl lt1_lt2_in_fe => In_annotate_exclusion
+     (proj1 (In_f_all lt1_lt2_in_fe)) lt1_in_r2
+   | or_intror lt1_lt2_in_ff => lt1_lt2_in_ff
+   end).
+Definition linear_match_alt_dest e f i s :
+  linear_match (Alt e f) i s ->
+  linear_match e i s \/ linear_match f (annotate_helper i e).(snd) s :=
+  match s
+  return
+    linear_match (Alt e f) i s ->
+    linear_match e i s \/ linear_match f (annotate_helper i e).(snd) s
+  with
+  | EmptyString => fun H => match orb_prop _ _ H with
+    | or_introl e_emp => or_introl e_emp
+    | or_intror f_emp => or_intror f_emp
+    end
+  | String c s => fun '(step mid c_in_mid mid_in_p rest) =>
+    match mid_in_p with
+    | or_introl mid_in_pe => or_introl
+      (step mid c_in_mid mid_in_pe
+       (linear_inner_alt_destl e f i s mid (In_p_all mid_in_pe) rest))
+    | or_intror mid_in_pf => or_intror
+      (step mid c_in_mid mid_in_pf
+       (linear_inner_alt_destr e f i s mid (In_p_all mid_in_pf) rest))
+    end
+  end.
+
+Definition linear_match_seq_destr e f i s mid :
+  In_p (fst (annotate_helper (snd (annotate_helper i e)) f)) mid ->
+  linear_inner (Seq e f) i s mid ->
+  linear_inner f (snd (annotate_helper i e)) s mid :=
+  fun mid_in_pf =>
+  linear_inner_strip (Seq e f) f i _ s mid (In_p_all mid_in_pf)
+  (fun lt lt_in_f lt_in_d => match lt_in_d with
+   | or_introl (conj _ lt_in_de) => In_annotate_exclusion
+     (In_d_all lt_in_de) lt_in_f
+   | or_intror lt_in_df => lt_in_df
+   end)
+  (fun lt1 lt2 lt1_in_f lt1_lt2_in_f => match lt1_lt2_in_f with
+   | or_introl (or_introl lt1_lt2_in_ef) => In_annotate_exclusion
+     (proj1 (In_f_all lt1_lt2_in_ef)) lt1_in_f
+   | or_introl (or_intror lt1_lt2_in_ff) => lt1_lt2_in_ff
+   | or_intror (conj lt1_in_de lt2_in_pf) => In_annotate_exclusion
+     (In_d_all lt1_in_de) lt1_in_f
+   end).
+Definition linear_match_seq_dest e f i s :
+  linear_match (Seq e f) i s ->
+  exists s1 s2, (s1 ++ s2)%string = s /\
+  (linear_match e i s1 /\ linear_match f (annotate_helper i e).(snd) s2) :=
+  match s with
+  | EmptyString => fun ef_emp => ex_intro _ EmptyString (ex_intro _ EmptyString
+    (conj eq_refl (andb_prop _ _ ef_emp)))
+  | String c s => fun '(step mid c_in_mid mid_in_p rest) =>
+    match mid_in_p with
+    | or_introl mid_in_pe =>
+      let fix rec s first
+          (first_in_e : In_regex (annotate_helper i e).(fst) first)
+        : linear_inner (Seq e f) i s first ->
+        exists s1 s2, (s1 ++ s2)%string = s /\
+        (linear_inner e i s1 first /\
+         linear_match f (annotate_helper i e).(snd) s2)
+       := match s with
+       | EmptyString => fun first_d => match first_d with
+         | or_introl (conj f_emp first_de) =>
+           ex_intro _ EmptyString (ex_intro _ EmptyString (conj eq_refl
+             (conj first_de f_emp)))
+         | or_intror first_df => In_annotate_exclusion
+           first_in_e (In_d_all first_df)
+         end
+       | String c1 s1 => fun '(step mid c1_in_mid first_mid_f rest) =>
+         match first_mid_f with
+         | or_introl (or_introl first_mid_fe) =>
+           let '(ex_intro _ s1 (ex_intro _ s2 (conj seq (conj me mf))))
+            := rec s1 mid (proj2 (In_f_all first_mid_fe)) rest in
+           ex_intro _ (String c1 s1) (ex_intro _ s2 (conj
+             (f_equal (String c1) seq) (conj
+             (step mid c1_in_mid first_mid_fe me)
+             mf)))
+         | or_introl (or_intror first_mid_ff) => In_annotate_exclusion
+           first_in_e (proj1 (In_f_all first_mid_ff))
+         | or_intror (conj first_de mid_pf) =>
+           ex_intro _ EmptyString (ex_intro _ (String c1 s1)
+             (conj eq_refl (conj first_de
+              (step mid c1_in_mid mid_pf
+               (linear_match_seq_destr e f i s1 mid mid_pf rest)))))
+         end
+       end in
+      let '(ex_intro _ s1 (ex_intro _ s2 (conj seq (conj me mf))))
+       := rec s mid (In_p_all mid_in_pe) rest in
+      ex_intro _ (String c s1) (ex_intro _ s2 (conj (f_equal (String c) seq)
+        (conj (step mid c_in_mid mid_in_pe me) mf)))
+    | or_intror (conj e_emp mid_in_pf) =>
+      ex_intro _ EmptyString (ex_intro _ (String c s) (conj eq_refl (conj e_emp
+        (step mid c_in_mid mid_in_pf
+         (linear_match_seq_destr e f i s mid mid_in_pf rest)))))
+    end
+  end.
+
+Definition linear_match_star_ind e i s
+  (ae := (annotate_helper i e).(fst))
+  (P : string -> Prop)
+  (IH_emp : P EmptyString)
+  (IH_more : forall s1 s2, linear_match e i s1 -> P s2 -> P (s1 ++ s2)%string)
+  : linear_match (Star e) i s -> P s :=
+  let fix ind_inner s first
+   : linear_inner (Star e) i s first ->
+     exists s1 s2, (s1 ++ s2)%string = s /\ (linear_inner e i s1 first /\ P s2)
+   := match s with
+   | EmptyString => fun first_in_d =>
+     ex_intro _ EmptyString (ex_intro _ EmptyString
+     (conj eq_refl (conj first_in_d IH_emp)))
+   | String c s => fun '(step mid c_in_mid first_mid_in_fse rest) =>
+     let '(ex_intro _ s1 (ex_intro _ s2 (conj seq (conj s1_rest s2P))))
+      := ind_inner s mid rest in
+     match first_mid_in_fse with
+     | or_introl first_mid_in_fe =>
+       ex_intro _ (String c s1)%string (ex_intro _ s2 (conj
+         (f_equal (String c) seq) (conj
+         (step mid c_in_mid first_mid_in_fe s1_rest)
+         s2P)))
+     | or_intror (conj first_in_de mid_in_pe) =>
+       ex_intro _ EmptyString (ex_intro _ (String c (s1 ++ s2)%string) (conj
+         (f_equal (String c) seq) (conj
+         first_in_de
+         (IH_more (String c s1) s2 (step mid c_in_mid mid_in_pe s1_rest) s2P))))
+     end
+   end in
+  match s return linear_match (Star e) i s -> P s with
+  | EmptyString => fun _ => IH_emp
+  | String c s => fun '(step mid c_in_mid mid_in_pe rest) =>
+    let '(ex_intro _ s1 (ex_intro _ s2 (conj seq (conj s1_rest s2P))))
+     := ind_inner s mid rest in
+    let H : P (String c s1 ++ s2)%string
+     := IH_more (String c s1) s2 (step mid c_in_mid mid_in_pe s1_rest) s2P in
+    match seq with eq_refl => H end
   end.
 
 Fixpoint linear_match_to_regex_match (r : regex CharSet.t) (i : Z) (s : string)
@@ -165,6 +571,12 @@ Fixpoint linear_match_to_regex_match (r : regex CharSet.t) (i : Z) (s : string)
     (fun s1 s2 mes1 => mStar_more e s1 s2
      (linear_match_to_regex_match e _ s1 mes1))
   end.
+
+Definition regex_match_iff_linear_match r i s :
+  regex_match r s <-> linear_match r i s :=
+  conj (regex_match_to_linear_match r i s) (linear_match_to_regex_match r i s).
+
+Axiom Admit : forall {T}, T.
 
 (* ---------------------- Proof below ---------------------- *)
 
@@ -284,12 +696,6 @@ Definition regex_match_to_path_result_weaken r1 r2 i1 i2 s next first
      | or_intror (ex_intro _ lt (conj lt_d path)) => or_intror
        (ex_intro _ lt (conj (H2 lt lt_d) path))
      end.
-
-Fixpoint string_app_emp (s : string) : s = (s ++ "")%string :=
-  match s with
-  | EmptyString => eq_refl
-  | String c s' => f_equal (String c) (string_app_emp s')
-  end.
 
 Definition regex_match_to_path_result_compose :
   forall r1 r2 r3 i1 i2 i3 s1 s2 next first,
