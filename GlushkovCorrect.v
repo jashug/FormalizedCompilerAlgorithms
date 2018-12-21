@@ -2,13 +2,19 @@ Set Primitive Projections.
 Set Uniform Inductive Parameters.
 Unset Universe Minimization ToSet.
 
-From Coq Require Import String Ascii ZArith.
-From Coq Require Import FSets FMaps FMapAVL OrderedTypeEx.
+From Coq Require Import String Ascii ZArith SetoidList.
+From Coq Require Import FSets FMaps FMapAVL OrderedTypeEx FMapFacts.
 
 Open Scope Z_scope.
 
 From CompilerOrg Require Import NFA Regex.
 Import LetterSet.Notation Letter2Set.Notation.
+
+Module CharMapP := FMapFacts.Properties(CharMap).
+Module CharSetF := FSetFacts.Facts(CharSet).
+Module CharSetP := FSetProperties.Properties(CharSet).
+Module StateMapP := FMapFacts.Properties(StateMap).
+Module CharSetMapP := FMapFacts.Properties(CharSetMap).
 
 (* p should match the left hand side of H and not the right, gives any type *)
 Local Notation "'discriminate' p H" :=
@@ -686,6 +692,14 @@ Fixpoint NFA_path
   StateSet.In last n.(finals) /\
   NFA_path n.(next) s first last. *)
 
+(* Fixpoint fold_left_ind {A B} {P : A -> list B -> Prop}
+  {f : A -> B -> A} {l : list B} {i : A}
+  (IH1 : forall a b l, P a l -> P (f a b) (cons b l))
+  : P i l -> P (fold_left f l i) l
+  := match l return P i l -> P (fold_left f l i) l with
+     | nil => fun H => H
+     | cons b l => fun H => IH1 _ b l _
+     end. *)
 Fixpoint fold_left_inc {A B} {P : A -> Prop}
   (f : A -> B -> A) (l : list B) (i : A)
   (IH : forall a b, P a -> P (f a b)) (IH2 : P i)
@@ -728,7 +742,7 @@ Definition LetterSet_prod_inc lt1 lt2 ls1 ls2 :
   end.
 
 (* definable in terms of finals_iff below *)
-Definition finals_d r first : StateSet.t :=
+(* Definition finals_d r first : StateSet.t :=
   if l r then StateSet.add first (positions (d r))
   else positions (d r).
 Definition if_l_first_final r i first (ar := (annotate_helper i r).(fst))
@@ -736,8 +750,8 @@ Definition if_l_first_final r i first (ar := (annotate_helper i r).(fst))
     StateSet.In first (finals_d (annotate_helper i r).(fst) first)
   := fun H => match eq_sym H in _ = b
      return StateSet.In first (if b then _ else _)
-     with eq_refl => StateSet.add_1 _ eq_refl end.
-Definition d_in_finals r i first (ar := (annotate_helper i r).(fst))
+     with eq_refl => StateSet.add_1 _ eq_refl end. *)
+(* Definition d_in_finals r i first (ar := (annotate_helper i r).(fst))
   : forall lt, LetterSet.S.In lt (d ar) ->
     StateSet.In lt.(snd) (finals_d (annotate_helper i r).(fst) first)
   := fun lt H =>
@@ -751,25 +765,495 @@ Definition d_in_finals r i first (ar := (annotate_helper i r).(fst))
        end in
      match l ar as b
      return StateSet.In lt.(snd) (if b then _ else _)
-     with true => StateSet.add_2 _ H' | false => H' end.
+     with true => StateSet.add_2 _ H' | false => H' end. *)
+
+Axiom Admit : forall {T}, T.
 
 (* characterize final states and transitions: *)
 (* more annoying than anything: make sure these work for the reverse direction
    before proving (the directions are reversed from goal) *)
-Axiom finals_iff : forall r state,
+
+(* This should probably be broken up *)
+Definition d_positions_pred_iff r i (ar := (annotate_helper i r).(fst)) state :
+  StateSet.In state (positions (d ar)) <->
+  (exists cs, In_d ar (cs , state)) :=
+  iff_trans (B := exists cs, LetterSet.S.In (cs , state) (d ar))
+  (match eq_sym (LetterSet.S.fold_1 _ _ _) in _ = pos
+   return StateSet.In _ pos <-> _ with eq_refl =>
+     iff_trans
+       (B := exists cs, InA Letter.eq (cs , state)
+                        (LetterSet.S.elements (d ar)))
+       (let fix rec l cur
+        : StateSet.In state
+            (fold_left (fun cur x => StateSet.add x.(snd) cur) l cur) <->
+          StateSet.In state cur \/ exists cs, InA Letter.eq (cs , state) l
+        := match l
+           return
+             StateSet.In state
+               (fold_left (fun cur x => StateSet.add x.(snd) cur) l cur) <->
+             StateSet.In state cur \/ exists cs, InA Letter.eq (cs , state) l
+           with
+           | nil => conj
+             (fun H => or_introl H)
+             (fun H => match H with
+              | or_introl H => H
+              | or_intror (ex_intro _ _ H) =>
+                match proj1 (InA_nil _ _) H with end
+              end)
+           | cons x l =>
+             iff_trans (rec l (StateSet.add x.(snd) cur))
+             (conj
+              (fun H => match H with
+               | or_introl H => match Z.eq_dec x.(snd) state with
+                 | left e => or_intror (ex_intro _ x.(fst)
+                   (InA_cons_hd l (eq_sym e : snd (_ , state) = snd x)))
+                 | right ne => or_introl (StateSet.add_3 ne H)
+                 end
+               | or_intror (ex_intro _ cs H) =>
+                 or_intror (ex_intro _ cs (InA_cons_tl x H))
+               end)
+              (fun H => match H with
+               | or_introl H => or_introl (StateSet.add_2 _ H)
+               | or_intror (ex_intro _ cs H) =>
+                 match Z.eq_dec x.(snd) state with
+                 | left e => or_introl (StateSet.add_1 _ e)
+                 | right ne => or_intror (ex_intro _ cs
+                   match proj1 (InA_cons _ _ _ _) H with
+                   | or_introl e =>
+                     match (ne : snd x <> state) (eq_sym e) with end
+                   | or_intror H => H
+                   end)
+                 end
+               end))
+           end in
+        iff_trans (rec (LetterSet.S.elements (d ar)) StateSet.empty)
+        (conj
+         (fun H => match H with
+          | or_introl H => match StateSet.empty_1 H with end
+          | or_intror H => H
+          end)
+         (fun H => or_intror H)))
+       (conj
+        (fun '(ex_intro _ cs H) =>
+         ex_intro (fun cs => _ (cs , _) _) cs (LetterSet.S.elements_2 H))
+        (fun '(ex_intro _ cs H) =>
+         ex_intro (fun cs => _ _ (cs , _) _) cs (LetterSet.S.elements_1 H)))
+   end)
+  (let fix rec r i (ar := (annotate_helper i r).(fst))
+    : (exists cs, LetterSet.S.In (cs , state) (d ar)) <->
+      (exists cs, In_d ar (cs , state))
+    := match r
+       return
+         let ar := (annotate_helper i r).(fst) in
+         (exists cs, LetterSet.S.In (cs , state) (d ar)) <->
+         (exists cs, In_d ar (cs , state))
+       with
+       | Empty | Eps => conj
+         (fun '(ex_intro _ cs H) => ex_intro _ cs (LetterSet.S.empty_1 H))
+         (fun '(ex_intro _ _ H) => match H : False with end)
+       | Char cs => conj
+         (fun '(ex_intro _ _ H) =>
+          let H2 : i = state
+           := LetterSet.S.singleton_1 H : snd (_ , _) = snd (_ , _) in
+          ex_intro _ cs (f_equal (pair cs) H2))
+         (fun '(ex_intro _ cs' H) =>
+          ex_intro _ cs' (LetterSet.S.singleton_2 (f_equal snd H)))
+       | Alt e f => conj
+         (fun '(ex_intro _ cs H) =>
+          match LetterSet.S.union_1 H with
+          | or_introl H =>
+            let '(ex_intro _ cs' H)
+             := proj1 (rec e _) (ex_intro (fun cs => _ (cs , _) _) cs H) in
+            ex_intro _ cs' (or_introl H)
+          | or_intror H =>
+            let '(ex_intro _ cs' H)
+             := proj1 (rec f _) (ex_intro (fun cs => _ (cs , _) _) cs H) in
+            ex_intro _ cs' (or_intror H)
+          end)
+         (fun '(ex_intro _ cs H) => match H with
+          | or_introl H =>
+            let '(ex_intro _ cs' H)
+             := proj2 (rec e _) (ex_intro (fun cs => In_d _ (cs , _)) cs H) in
+            ex_intro _ cs' (LetterSet.S.union_2 _ H)
+          | or_intror H =>
+            let '(ex_intro _ cs' H)
+             := proj2 (rec f _) (ex_intro (fun cs => In_d _ (cs , _)) cs H) in
+            ex_intro _ cs' (LetterSet.S.union_3 _ H)
+          end)
+       | Seq e f => conj
+         (fun '(ex_intro _ cs H) =>
+          match LetterSet.S.union_1 H with
+          | or_introl H =>
+            match l _ as b
+            return l _ = b -> LetterSet.S.In _ (if b then _ else _) -> _
+            with
+            | false => fun _ H => match LetterSet.S.empty_1 H with end
+            | true => fun f_emp H =>
+              let '(ex_intro _ cs' H)
+               := proj1 (rec e _) (ex_intro (fun cs => _ (cs , _) _) cs H) in
+              ex_intro _ cs' (or_introl (conj f_emp H))
+            end eq_refl H
+          | or_intror H =>
+            let '(ex_intro _ cs' H)
+             := proj1 (rec f _) (ex_intro (fun cs => _ (cs , _) _) cs H) in
+            ex_intro _ cs' (or_intror H)
+          end)
+         (fun '(ex_intro _ cs H) =>
+          match H with
+          | or_introl (conj f_emp H) =>
+            let '(ex_intro _ cs' H)
+             := proj2 (rec e _) (ex_intro (fun cs => In_d _ (cs , _)) cs H) in
+            ex_intro _ cs' (LetterSet.S.union_2 _
+            match eq_sym f_emp : true = _ in _ = b
+            return LetterSet.S.In _ (if b then _ else _)
+            with eq_refl => H end)
+          | or_intror H =>
+            let '(ex_intro _ cs' H)
+             := proj2 (rec f _) (ex_intro (fun cs => In_d _ (cs , _)) cs H) in
+            ex_intro _ cs' (LetterSet.S.union_3 _ H)
+          end)
+       | Star e => rec e i
+       end in
+   rec r i).
+
+Definition finals_iff r state :
   StateSet.In state (compile r).(finals) <->
   (exists cs, In_d (annotate r) (cs , state)) \/
-  (l (annotate r) = true /\ state = 0).
+  (l (annotate r) = true /\ state = 0) :=
+  conj
+  (let state_to_letter_d
+    : StateSet.In state (positions (d (annotate r))) ->
+      exists cs, In_d (annotate r) (cs , state)
+    := proj1 (d_positions_pred_iff r _ state) in
+   match l (annotate r) as b
+   return StateSet.In state (if b then _ else _) -> _ \/ b = true /\ _ with
+   | true => match Z.eq_dec 0 state with
+     | left e => fun _ => or_intror (conj eq_refl (eq_sym e))
+     | right ne => fun st_final =>
+       let H : StateSet.In state (positions (d (annotate r)))
+        := StateSet.add_3 ne st_final in
+       or_introl (state_to_letter_d H)
+     end
+   | false => fun H => or_introl (state_to_letter_d H)
+   end)
+  (fun H => match H with
+   | or_introl H =>
+     let H2 : StateSet.In state _
+      := proj2 (d_positions_pred_iff r _ state) H in
+     match l (annotate r) as b return StateSet.In state (if b then _ else _)
+     with true => StateSet.add_2 _ H2 | false => H2 end
+   | or_intror (conj r_emp st0) =>
+     match eq_sym r_emp : true = _ in _ = b
+     return StateSet.In state (if b then _ else _)
+     with eq_refl => StateSet.add_1 _ (eq_sym st0) end
+   end).
 
-Axiom transitions_iff : forall r st1 st2 c,
-  StateSet.In st2 (find_default ((compile r).(next) st1) c) <->
+Definition unwrap_defaults st1 st2 c sm
+  (f : CharSetMap.t StateSet.t -> CharMap.t StateSet.t) :
+  StateSet.In st2
+   (find_default match StateMap.find st1 sm with
+    | Some cm => f cm
+    | None => CharMap.empty _
+    end c) <->
+  exists cm, StateMap.MapsTo st1 cm sm /\
+  exists ss, CharMap.MapsTo c ss (f cm) /\
+  StateSet.In st2 ss :=
+  match StateMap.find st1 sm as found
+  return
+    StateMap.find st1 sm = found ->
+    StateSet.In st2 (find_default
+      match found with
+      | None => CharMap.empty _
+      | Some cm => f cm
+      end c) <-> _
+  with
+  | Some cm => fun st1_found_cm =>
+    let st1_to_cm := StateMap.find_2 st1_found_cm in
+    let inner cm
+     : StateSet.In st2 (find_default cm c) <->
+       exists ss, CharMap.MapsTo c ss cm /\ StateSet.In st2 ss
+     := match CharMap.find c cm as found
+        return
+          CharMap.find c cm = found ->
+          StateSet.In st2
+          match found with None => StateSet.empty | Some ss => ss end
+          <-> _
+        with
+        | Some ss => fun c_found_ss =>
+          let c_to_ss := CharMap.find_2 c_found_ss in
+          conj
+          (fun H : StateSet.In st2 ss => ex_intro _ ss (conj c_to_ss H))
+          (fun '(ex_intro _ ss' (conj c_to_ss' st2_in_ss')) =>
+           match CharMapP.F.MapsTo_fun c_to_ss' c_to_ss
+           with eq_refl => st2_in_ss' end)
+        | None => fun c_not_found => conj
+          (fun H => match StateSet.empty_1 H with end)
+          (fun '(ex_intro _ ss (conj c_to_ss st2_in_ss)) =>
+           discriminate None
+           (eq_trans (eq_sym c_not_found) (CharMap.find_1 c_to_ss)))
+        end eq_refl
+    in
+    iff_trans (inner (f cm)) (conj
+    (fun H => ex_intro _ cm (conj st1_to_cm H))
+    (fun '(ex_intro _ cm' (conj st1_to_cm' H)) =>
+     match StateMapP.F.MapsTo_fun st1_to_cm' st1_to_cm
+     with eq_refl => H end))
+  | None => fun st1_not_found =>
+    match CharMap.find c (CharMap.empty _) as found
+    return
+      CharMap.find c (CharMap.empty StateSet.t) = found ->
+      StateSet.In st2 match found with
+        | None => StateSet.empty
+        | Some ss => ss
+        end <-> _
+    with
+    | Some ss => fun c_found_in_empty =>
+      match CharMap.empty_1 (CharMap.find_2 c_found_in_empty) with end
+    | None => fun c_not_found => conj
+      (fun H => match StateSet.empty_1 H with end)
+      (fun '(ex_intro _ cm (conj st1_to_cm _)) => discriminate None
+       (eq_trans (eq_sym st1_not_found) (StateMap.find_1 st1_to_cm)))
+    end eq_refl
+  end eq_refl.
+
+(* Definition flatten_transitions_iff st c cm :
+  StateSet.In st (find_default (flatten_transitions cm) c) <->
+  exists cs, CharSet.In c cs /\
+  exists ss, CharSetMap.MapsTo cs ss cm /\ StateSet.In st ss :=
+  CharSetMapP.fold_rec
+  (P := fun cm acc =>
+   StateSet.In st (find_default acc c) <->
+   exists cs, CharSet.In c cs /\
+   exists ss, CharSetMap.MapsTo cs ss cm /\ StateSet.In st ss)
+  (fun m m_emp => Admit)
+  (fun cs ss acc m1 m2 cs_to_ss_cm cs_not_in_m1 add_cs_ss_m1_m2 IH => Admit). *)
+
+Definition flatten_transitions_helper ss c cm :=
+  let entry := match CharMap.find c cm with
+    | None => StateSet.empty
+    | Some ss => ss
+    end
+  in CharMap.add c (StateSet.union ss entry) cm.
+
+(* Definition flatten_transitions_helper_iff2 c s cs ss acc cm :
+  (StateSet.In s (CharMap.find c acc) <->
+   exists cs', CharSet.In c cs' /\ StateSet.In (CharSetMap.find cs' cm)) ->
+  (StateSet.In s (CharMap.find c
+   (CharSet.fold (flatten_transitions_helper ss) cs acc))) <->
+  (exists cs', CharSet.In c cs' /\
+   StateSet.In s CharSetMap.find cs' (CharSetMap.add cs ss cm)) :=
+  fun IH => iff_trans
+  (B := (exists cs', CharSet.In c cs' /\
+         StateSet.In s (CharSetMap.find cs' cm)) \/
+        CharSet.In c cs /\ StateSet.In s ss)
+  (Admit)
+  (Admit). *)
+
+Definition flatten_transitions_helper_monotone s ss c1 c2 acc :
+  (exists ss', CharMap.MapsTo c1 ss' acc /\ StateSet.In s ss') ->
+  (exists ss', CharMap.MapsTo c1 ss' (flatten_transitions_helper ss c2 acc) /\
+   StateSet.In s ss') :=
+  fun '(ex_intro _ ss' (conj c1_to_ss' s_in_ss')) =>
+  match Char_as_UOT.eq_dec c2 c1 with
+  | left e => ex_intro _ _ (conj (CharMap.add_1 _ _ e) (StateSet.union_3 _
+    match eq_sym e with eq_refl =>
+      match eq_sym (CharMap.find_1 c1_to_ss') in _ = found
+      return StateSet.In s (match found with None => _ | _ => _ end)
+      with eq_refl => s_in_ss' end
+    end))
+  | right ne => ex_intro _ ss' (conj (CharMap.add_2 _ ne c1_to_ss') s_in_ss')
+  end.
+
+Definition flatten_transitions_helper_iff c s cs ss acc cm
+  (cs_not_in_cm : ~ CharSetMap.In cs cm) :
+  ((exists ss', CharMap.MapsTo c ss' acc /\ StateSet.In s ss') <->
+   exists cs', CharSet.In c cs' /\
+   exists ss', CharSetMap.MapsTo cs' ss' cm /\ StateSet.In s ss') ->
+  (exists ss', CharMap.MapsTo c ss'
+    (CharSet.fold (flatten_transitions_helper ss) cs acc) /\
+   StateSet.In s ss') <->
+  (exists cs', CharSet.In c cs' /\
+   exists ss', CharSetMap.MapsTo cs' ss' (CharSetMap.add cs ss cm) /\
+   StateSet.In s ss') :=
+  fun IH =>
+  (conj
+   (CharSetP.fold_rec_nodep
+    (P := fun acc' =>
+     (exists ss', CharMap.MapsTo c ss' acc' /\ StateSet.In s ss') ->
+     (exists cs', CharSet.In c cs' /\
+      exists ss', CharSetMap.MapsTo cs' ss' (CharSetMap.add cs ss cm) /\
+      StateSet.In s ss'))
+     (fun H =>
+      let '(ex_intro _ cs' (conj c_in_cs'
+           (ex_intro _ ss' (conj cs'_to_ss' s_in_ss'))))
+       := proj1 IH H in
+      ex_intro _ cs' (conj c_in_cs'
+      (ex_intro _ ss' (conj
+       (CharSetMap.add_2 _
+        (fun H : CharSet.eq cs cs' => cs_not_in_cm
+         (proj2 (CharSetMapP.F.In_m H (CharSetMapP.F.Equal_refl _))
+          (ex_intro _ ss' cs'_to_ss')))
+        cs'_to_ss')
+       s_in_ss'))))
+     (fun c' acc c'_in_cs IH '(ex_intro _ ss' (conj c_to_ss' s_in_ss')) =>
+      match Char_as_UOT.eq_dec c' c with
+      | left e =>
+        match eq_sym (CharMapP.F.MapsTo_fun c_to_ss' (CharMap.add_1 _ _ e))
+        in _ = ss' return StateSet.In s ss' -> _
+        with eq_refl => fun s_in_union =>
+        match StateSet.union_1 s_in_union
+        return
+          exists cs' : CharSet.t, CharSet.In c cs' /\
+          exists ss' : StateSet.t,
+          CharSetMap.MapsTo cs' ss' (CharSetMap.add cs ss cm) /\
+          StateSet.In s ss'
+        with
+        | or_introl s_in_ss =>
+          ex_intro _ cs (conj match e with eq_refl => c'_in_cs end
+          (ex_intro _ ss (conj (CharSetMap.add_1 _ _ (CharSet.eq_refl _))
+           s_in_ss)))
+        | or_intror s_in_old =>
+          let '(ex_intro _ cs' (conj c_in_cs'
+               (ex_intro _ ss' (conj cs'_to_ss' s_in_ss'))))
+           := IH
+            (match CharMap.find c' acc as found
+             return
+               CharMap.find c' acc = found ->
+               StateSet.In s
+                 match found with Some ss => ss | None => StateSet.empty end ->
+               _
+             with
+             | Some ss => fun c_found_ss s_in_ss => ex_intro _ ss (conj
+               match e with eq_refl => CharMap.find_2 c_found_ss end
+               s_in_ss)
+             | None => fun _ H => match StateSet.empty_1 H with end
+             end eq_refl s_in_old) in
+          match proj1 (CharSetMapP.F.add_mapsto_iff _ _ _ _ _) cs'_to_ss' with
+          | or_introl (conj cs_eq_cs' ss_eq_ss') =>
+            ex_intro _ cs' (conj c_in_cs'
+            (ex_intro _ ss' (conj cs'_to_ss' s_in_ss')))
+          | or_intror (conj cs_ne_cs' cs'_to_ss') =>
+            ex_intro _ cs' (conj c_in_cs'
+            (ex_intro _ ss' (conj
+             (CharSetMap.add_2 _ cs_ne_cs' cs'_to_ss')
+             s_in_ss')))
+          end
+        end end s_in_ss'
+      | right ne =>
+        let '(ex_intro _ cs' (conj c_in_cs'
+               (ex_intro _ ss' (conj cs'_to_ss' s_in_ss'))))
+           := IH (ex_intro _ ss' (conj (CharMap.add_3 ne c_to_ss') s_in_ss')) in
+        match proj1 (CharSetMapP.F.add_mapsto_iff _ _ _ _ _) cs'_to_ss' with
+        | or_introl (conj cs_eq_cs' ss_eq_ss') =>
+          ex_intro _ cs' (conj c_in_cs'
+          (ex_intro _ ss' (conj cs'_to_ss' s_in_ss')))
+        | or_intror (conj cs_ne_cs' cs'_to_ss') =>
+          ex_intro _ cs' (conj c_in_cs'
+          (ex_intro _ ss' (conj
+           (CharSetMap.add_2 _ cs_ne_cs' cs'_to_ss')
+           s_in_ss')))
+        end
+      end))
+   (fun '(ex_intro _ cs' (conj c_in_cs'
+         (ex_intro _ ss' (conj cs'_to_ss' s_in_ss')))) =>
+    match proj1 (CharSetMapP.F.add_mapsto_iff _ _ _ _ _) cs'_to_ss' with
+    | or_introl (conj cs_eq_cs' ss_eq_ss') =>
+      let H
+       := CharSetP.fold_rec_bis
+          (P := fun cs acc' =>
+           (exists ss', CharMap.MapsTo c ss' acc /\ StateSet.In s ss') \/
+           CharSet.In c cs ->
+           (exists ss', CharMap.MapsTo c ss' acc' /\ StateSet.In s ss'))
+          (f := flatten_transitions_helper ss) (i := acc) (s := cs)
+          (fun cs1 cs2 acc' cseq H H2 => H
+           match H2 with
+           | or_introl H2 => or_introl H2
+           | or_intror H2 => or_intror (proj2 (cseq _) H2)
+           end)
+          (fun H => match H with
+           | or_introl H => H
+           | or_intror H => match CharSet.empty_1 H with end
+           end)
+          (fun c' acc cs _ _ IH H => match H with
+           | or_introl H => let H := IH (or_introl H) in
+             flatten_transitions_helper_monotone _ _ _ _ _ H
+           | or_intror H => match proj1 (CharSetP.Dec.F.add_iff _ _ _) H with
+             | or_introl H => ex_intro _ _ (conj
+               (CharMap.add_1 _ _ H)
+               (StateSet.union_2 _
+                match eq_sym ss_eq_ss' with eq_refl => s_in_ss' end))
+             | or_intror H => let H := IH (or_intror H) in
+               flatten_transitions_helper_monotone _ _ _ _ _ H
+             end
+           end)
+      in H (or_intror (proj2 (cs_eq_cs' _) c_in_cs'))
+    | or_intror (conj ce_ne_cs' cs'_to_ss') =>
+      CharSetP.fold_rec_nodep
+      (P := fun acc' =>
+       exists ss', CharMap.MapsTo c ss' acc' /\ StateSet.In s ss')
+      (f := flatten_transitions_helper ss) (i := acc) (s := cs)
+      (proj2 IH
+       (ex_intro _ cs' (conj c_in_cs'
+       (ex_intro _ ss' (conj cs'_to_ss' s_in_ss')))))
+      (fun _ _ _ IH => flatten_transitions_helper_monotone _ _ _ _ _ IH)
+    end)).
+
+Definition flatten_transitions_iff3 c cm s :
+  (exists ss, CharMap.MapsTo c ss (flatten_transitions cm) /\
+              StateSet.In s ss) <->
+  exists cs, CharSet.In c cs /\
+  exists ss, CharSetMap.MapsTo cs ss cm /\ StateSet.In s ss :=
+  CharSetMapP.fold_rec_bis
+  (P := fun cm acc =>
+   (exists ss, CharMap.MapsTo c ss acc /\ StateSet.In s ss) <->
+   exists cs, CharSet.In c cs /\
+   exists ss, CharSetMap.MapsTo cs ss cm /\ StateSet.In s ss)
+  (fun m1 m2 acc meq H => iff_trans H (conj
+   (fun '(ex_intro _ cs (conj c_in_cs
+         (ex_intro _ ss (conj cs_to_ss s_in_ss)))) =>
+    let cs_to_ss' :=
+      proj1 (proj1 (CharSetMapP.F.Equal_mapsto_iff m1 m2) meq cs ss) cs_to_ss in
+    ex_intro _ cs (conj c_in_cs
+    (ex_intro _ ss (conj cs_to_ss' s_in_ss))))
+   (fun '(ex_intro _ cs (conj c_in_cs
+         (ex_intro _ ss (conj cs_to_ss s_in_ss)))) =>
+    let cs_to_ss' :=
+      proj2 (proj1 (CharSetMapP.F.Equal_mapsto_iff m1 m2) meq cs ss) cs_to_ss in
+    ex_intro _ cs (conj c_in_cs
+    (ex_intro _ ss (conj cs_to_ss' s_in_ss))))))
+  (conj
+   (fun '(ex_intro _ ss (conj H _)) => match CharMap.empty_1 H with end)
+   (fun '(ex_intro _ cs (conj _ (ex_intro _ ss (conj H _)))) =>
+    match CharSetMap.empty_1 H with end))
+  (fun cs ss acc m _ => flatten_transitions_helper_iff c s cs ss acc m).
+
+Definition flatten_transitions_iff2 st1 st2 c sm :
+  (exists cm, StateMap.MapsTo st1 cm sm /\
+   exists ss : StateSet.t, CharMap.MapsTo c ss (flatten_transitions cm) /\
+   StateSet.In st2 ss) <->
+  exists cm, StateMap.MapsTo st1 cm sm /\
+  exists cs, CharSet.In c cs /\
+  exists ss, CharSetMap.MapsTo cs ss cm /\
+  StateSet.In st2 ss :=
+  conj
+  (fun '(ex_intro _ cm (conj st1_to_cm H)) => ex_intro _ cm (conj st1_to_cm
+   (proj1 (flatten_transitions_iff3 c cm st2) H)))
+  (fun '(ex_intro _ cm (conj st1_to_cm H)) => ex_intro _ cm (conj st1_to_cm
+   (proj2 (flatten_transitions_iff3 c cm st2) H))).
+
+Definition transitions_iff r st1 st2 c :
+  StateSet.In st2 (find_states c (compile r) st1) <->
   (exists cs1 cs2,
    In_f (annotate r) (cs1 , st1) (cs2 , st2) /\
    CharSet.In c cs2) \/
   (exists cs2,
    In_p (annotate r) (cs2 , st2) /\
    CharSet.In c cs2 /\
-   st1 = 0).
+   st1 = 0) :=
+  iff_trans (iff_trans
+  (unwrap_defaults st1 st2 c _ flatten_transitions)
+  (flatten_transitions_iff2 st1 st2 c _))
+  (Admit).
 
 Definition expand_pair {A B : Type} {P : A * B -> Type} {p : A * B}
   : P p -> P (fst p , snd p)
@@ -869,14 +1353,14 @@ Definition interior_transitions_iff r lt1 st2 c
       end
   end. *)
 (* as an example *)
-Definition compile_all_first_letters r
+(* Definition compile_all_first_letters r
     lt (H1 : In_p (annotate r) lt)
     c (H2 : CharSet.In c lt.(fst))
   : StateSet.In lt.(snd) (find_states c (compile r) 0) :=
   proj2 (transitions_iff r 0 lt.(snd) c) (or_intror
     (ex_intro _ lt.(fst) (conj
       (expand_pair H1)
-      (conj H2 eq_refl)))).
+      (conj H2 eq_refl)))). *)
 
 (* Definition accept_emp_iff_some_cur_state_final r cur
   : (exists st, StateSet.In st cur /\ StateSet.In st (compile r).(finals)) <->
