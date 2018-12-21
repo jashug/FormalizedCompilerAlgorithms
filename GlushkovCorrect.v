@@ -16,12 +16,6 @@ Module CharSetP := FSetProperties.Properties(CharSet).
 Module StateMapP := FMapFacts.Properties(StateMap).
 Module CharSetMapP := FMapFacts.Properties(CharSetMap).
 
-(* p should match the left hand side of H and not the right, gives any type *)
-Local Notation "'discriminate' p H" :=
-  (match H in _ = x return match x with p => True | _ => _ end
-   with eq_refl => I end)
-  (at level 10, p pattern).
-
 (*
 Here we prove that compile : regex CharSet.t -> NFA produces
 an automaton that recognizes the same language as the input regex.
@@ -47,6 +41,14 @@ Definition Glushkov_is_correct : Prop :=
   forall r s, regex_match r s <-> accept (compile r) s = true.
 
 (* ---------------------- Local languages ---------------------- *)
+
+(* General lemmas *)
+
+(* p should match the left hand side of H and not the right, gives any type *)
+Local Notation "'discriminate' p H" :=
+  (match H in _ = x return match x with p => True | _ => _ end
+   with eq_refl => I end)
+  (at level 10, p pattern).
 
 Fixpoint string_app_emp (s : string) : s = (s ++ "")%string :=
   match s with
@@ -218,6 +220,10 @@ Fixpoint local_inner
   | String c s => local_step c (In_f ar first) (local_inner r i s)
   end.
 
+(*
+Local match should be equiprovable with regex_match; we prove this by giving
+constructors and an induction principle that match that of regex_match.
+*)
 Definition local_match
   (r : regex CharSet.t) (i : Z) (ar := (annotate_helper i r).(fst))
   (s : string) : Prop :=
@@ -350,6 +356,7 @@ Definition local_match_star_intro_more e i s1 s2 :
    | or_intror H => or_intror H
    end).
 
+(* Given a regex_match, we can produce a local_match *)
 Fixpoint regex_match_to_local_match (r : regex CharSet.t) (i : Z) (s : string)
   (m : regex_match r s) : local_match r i s :=
   match m with
@@ -577,6 +584,7 @@ Definition local_match_star_ind e i s
     match seq with eq_refl => H end
   end.
 
+(* Given a local_match, we can produce a regex_match *)
 Fixpoint local_match_to_regex_match (r : regex CharSet.t) (i : Z) (s : string)
   : local_match r i s -> regex_match r s :=
   match r with
@@ -609,58 +617,10 @@ Definition regex_match_iff_local_match r i s :
 
 (* ---------------------- NFA paths ---------------------- *)
 
-(* Fixpoint local_match_to_NFA_accept r s (cur : StateSet.t) (start : state)
-  (start_in_cur : StateSet.In start cur)
-  : local_match r start s ->
-    let curNFA := {|
-      start := cur;
-      finals := (compile r).(finals);
-      next := (compile r).(next)
-    |} in accept curNFA s = true :=
-  match s with
-  | EmptyString => fun r_emp =>
-    let cur_inter_final := StateSet.inter cur (compile r).(finals) in
-    let H1 : StateSet.In start (compile r).(finals) :=
-      match eq_sym r_emp in _ = b return StateSet.In start (if b then _ else _)
-      with eq_refl => _ end in
-    match StateSet.is_empty cur_inter_final as b
-    return StateSet.is_empty cur_inter_final = b -> negb b = true with
-    | false => fun _ => eq_refl
-    | true => fun H =>
-      match StateSet.is_empty_2 H (StateSet.inter_3 start_in_cur H1) with end
-    end eq_refl
-  | String c s => _
-  end. *)
-
-Check I.
-
-(* 
-
-Definition local_match_iff_NFA_accept r s :
-  local_match r 1 s <-> accept (compile r) s = true :=
-  match s return local_match r 1 s <-> accept (compile r) s = true with
-  | EmptyString => iff_trans
-    (conj
-     (fun r_emp => ex_intro _ 0 (conj
-      (StateSet.singleton_2 eq_refl)
-      (Admit(* if_l_first_final below *))))
-     (fun '(ex_intro _ st (conj st_in_s0 st_in_finals)) =>
-      match StateSet.singleton_1 st_in_s0 in _ = st
-      return StateSet.In st (compile r).(finals) -> l (annotate r) = true
-      with eq_refl =>
-        match l (annotate r) as b
-        return StateSet.In 0 (if b then _ else _) -> b = true
-        with
-        | true => fun _ => eq_refl
-        | false => fun H => Admit(* 0 not in positions (d (annotate r)) *)
-        end
-      end st_in_finals))
-    (accept_emp_iff_some_cur_state_final r (StateSet.singleton 0))
-  | String c s => conj
-    (fun '(step mid c_in_mid mid_in_p rest) =>
-     _)
-    (Admit)
-  end. *)
+(*
+Here, we want to prove that local_match corresponds to a path through
+the NFA given by compile.
+*)
 
 Definition find_default (cm : CharMap.t StateSet.t) (key : ascii) : StateSet.t
   := match CharMap.find key cm with
@@ -668,7 +628,6 @@ Definition find_default (cm : CharMap.t StateSet.t) (key : ascii) : StateSet.t
      | Some ss => ss
      end.
 
-(* Go through NFA_path_accept *)
 Fixpoint NFA_path
     (next : state -> CharMap.t StateSet.t) (finals : StateSet.t) (s : string)
     (first : state) : Prop :=
@@ -678,28 +637,7 @@ Fixpoint NFA_path
       StateSet.In mid (find_default (next first) c) /\
       NFA_path next finals s mid
   end.
-(* Fixpoint NFA_path_compose next s1 s2 first mid last
-  : NFA_path next s1 first mid -> NFA_path next s2 mid last ->
-    NFA_path next (s1 ++ s2) first last :=
-  match s1 with
-  | EmptyString => fun 'eq_refl p2 => p2
-  | String c s => fun '(ex_intro _ mid (conj P p1)) p2 =>
-    ex_intro _ mid (conj P (NFA_path_compose _ _ _ _ _ _ p1 p2))
-  end. *)
-(* Definition NFA_path_accept (n : NFA) (s : string) : Prop :=
-  exists (first last : state),
-  StateSet.In first n.(start) /\
-  StateSet.In last n.(finals) /\
-  NFA_path n.(next) s first last. *)
 
-(* Fixpoint fold_left_ind {A B} {P : A -> list B -> Prop}
-  {f : A -> B -> A} {l : list B} {i : A}
-  (IH1 : forall a b l, P a l -> P (f a b) (cons b l))
-  : P i l -> P (fold_left f l i) l
-  := match l return P i l -> P (fold_left f l i) l with
-     | nil => fun H => H
-     | cons b l => fun H => IH1 _ b l _
-     end. *)
 Fixpoint fold_left_inc {A B} {P : A -> Prop}
   (f : A -> B -> A) (l : list B) (i : A)
   (IH : forall a b, P a -> P (f a b)) (IH2 : P i)
@@ -741,37 +679,7 @@ Definition LetterSet_prod_inc lt1 lt2 ls1 ls2 :
     (LetterSet.S.elements_1 H1)
   end.
 
-(* definable in terms of finals_iff below *)
-(* Definition finals_d r first : StateSet.t :=
-  if l r then StateSet.add first (positions (d r))
-  else positions (d r).
-Definition if_l_first_final r i first (ar := (annotate_helper i r).(fst))
-  : l ar = true ->
-    StateSet.In first (finals_d (annotate_helper i r).(fst) first)
-  := fun H => match eq_sym H in _ = b
-     return StateSet.In first (if b then _ else _)
-     with eq_refl => StateSet.add_1 _ eq_refl end. *)
-(* Definition d_in_finals r i first (ar := (annotate_helper i r).(fst))
-  : forall lt, LetterSet.S.In lt (d ar) ->
-    StateSet.In lt.(snd) (finals_d (annotate_helper i r).(fst) first)
-  := fun lt H =>
-     let H' : StateSet.In lt.(snd) (positions (d ar)) :=
-       match eq_sym (LetterSet.S.fold_1 (d ar) _ _) in _ = ss
-       return StateSet.In lt.(snd) ss with eq_refl =>
-         fold_left_inc_in (P := StateSet.In lt.(snd)) _ _ _
-           (fun ss lt H => StateSet.add_2 _ H)
-           _ (fun ss lt e => StateSet.add_1 ss (eq_sym e))
-           (LetterSet.S.elements_1 H)
-       end in
-     match l ar as b
-     return StateSet.In lt.(snd) (if b then _ else _)
-     with true => StateSet.add_2 _ H' | false => H' end. *)
-
-Axiom Admit : forall {T}, T.
-
 (* characterize final states and transitions: *)
-(* more annoying than anything: make sure these work for the reverse direction
-   before proving (the directions are reversed from goal) *)
 
 (* This should probably be broken up *)
 Definition d_positions_pred_iff r i (ar := (annotate_helper i r).(fst)) state :
@@ -916,6 +824,10 @@ Definition d_positions_pred_iff r i (ar := (annotate_helper i r).(fst)) state :
        end in
    rec r i).
 
+(*
+Here we characterize the final states of (compile r) as either states which
+are in d or 0, when l = true
+*)
 Definition finals_iff r state :
   StateSet.In state (compile r).(finals) <->
   (exists cs, In_d (annotate r) (cs , state)) \/
@@ -948,6 +860,10 @@ Definition finals_iff r state :
      with eq_refl => StateSet.add_1 _ (eq_sym st0) end
    end).
 
+(*
+Equivalence between definition of transition in terms of find and
+predicates describing that s is in the result when looking up (st1, c) in sm
+*)
 Definition unwrap_defaults st1 st2 c sm
   (f : CharSetMap.t StateSet.t -> CharMap.t StateSet.t) :
   StateSet.In st2
@@ -1016,38 +932,12 @@ Definition unwrap_defaults st1 st2 c sm
     end eq_refl
   end eq_refl.
 
-(* Definition flatten_transitions_iff st c cm :
-  StateSet.In st (find_default (flatten_transitions cm) c) <->
-  exists cs, CharSet.In c cs /\
-  exists ss, CharSetMap.MapsTo cs ss cm /\ StateSet.In st ss :=
-  CharSetMapP.fold_rec
-  (P := fun cm acc =>
-   StateSet.In st (find_default acc c) <->
-   exists cs, CharSet.In c cs /\
-   exists ss, CharSetMap.MapsTo cs ss cm /\ StateSet.In st ss)
-  (fun m m_emp => Admit)
-  (fun cs ss acc m1 m2 cs_to_ss_cm cs_not_in_m1 add_cs_ss_m1_m2 IH => Admit). *)
-
 Definition flatten_transitions_helper ss c cm :=
   let entry := match CharMap.find c cm with
     | None => StateSet.empty
     | Some ss => ss
     end
   in CharMap.add c (StateSet.union ss entry) cm.
-
-(* Definition flatten_transitions_helper_iff2 c s cs ss acc cm :
-  (StateSet.In s (CharMap.find c acc) <->
-   exists cs', CharSet.In c cs' /\ StateSet.In (CharSetMap.find cs' cm)) ->
-  (StateSet.In s (CharMap.find c
-   (CharSet.fold (flatten_transitions_helper ss) cs acc))) <->
-  (exists cs', CharSet.In c cs' /\
-   StateSet.In s CharSetMap.find cs' (CharSetMap.add cs ss cm)) :=
-  fun IH => iff_trans
-  (B := (exists cs', CharSet.In c cs' /\
-         StateSet.In s (CharSetMap.find cs' cm)) \/
-        CharSet.In c cs /\ StateSet.In s ss)
-  (Admit)
-  (Admit). *)
 
 Definition flatten_transitions_helper_monotone s ss c1 c2 acc :
   (exists ss', CharMap.MapsTo c1 ss' acc /\ StateSet.In s ss') ->
@@ -1198,7 +1088,11 @@ Definition flatten_transitions_helper_iff c s cs ss acc cm
       (fun _ _ _ IH => flatten_transitions_helper_monotone _ _ _ _ _ IH)
     end)).
 
-Definition flatten_transitions_iff3 c cm s :
+(* Characterize flatten_transitions:
+s is in (flatten_transitions cm) at c iff
+for some cs containing c, s is in cm at cs
+*)
+Definition flatten_transitions_iff c cm s :
   (exists ss, CharMap.MapsTo c ss (flatten_transitions cm) /\
               StateSet.In s ss) <->
   exists cs, CharSet.In c cs /\
@@ -1237,10 +1131,24 @@ Definition flatten_transitions_iff2 st1 st2 c sm :
   StateSet.In st2 ss :=
   conj
   (fun '(ex_intro _ cm (conj st1_to_cm H)) => ex_intro _ cm (conj st1_to_cm
-   (proj1 (flatten_transitions_iff3 c cm st2) H)))
+   (proj1 (flatten_transitions_iff c cm st2) H)))
   (fun '(ex_intro _ cm (conj st1_to_cm H)) => ex_intro _ cm (conj st1_to_cm
-   (proj2 (flatten_transitions_iff3 c cm st2) H))).
+   (proj2 (flatten_transitions_iff c cm st2) H))).
 
+(* This is the largest remaining hole *)
+Axiom transitions_characterization_iff : forall r st1 st2 c,
+  (exists cm, StateMap.MapsTo st1 cm
+      (StateMap.add start_state (transition_map_of_letter_set (p (annotate r)))
+         (transition_map_of_factor_set (f_ (annotate r)))) /\
+   exists cs, CharSet.In c cs /\
+   exists ss : StateSet.t, CharSetMap.MapsTo cs ss cm /\ StateSet.In st2 ss)
+  <->
+  (exists cs1 cs2 : CharSet.t, In_f (annotate r) (cs1, st1) (cs2, st2) /\
+   CharSet.In c cs2) \/
+  (exists cs2 : CharSet.t, In_p (annotate r) (cs2, st2) /\
+   CharSet.In c cs2 /\ st1 = 0).
+
+(* Here we characterize transitions in (compile r) in terms of f and p *)
 Definition transitions_iff r st1 st2 c :
   StateSet.In st2 (find_states c (compile r) st1) <->
   (exists cs1 cs2,
@@ -1253,13 +1161,13 @@ Definition transitions_iff r st1 st2 c :
   iff_trans (iff_trans
   (unwrap_defaults st1 st2 c _ flatten_transitions)
   (flatten_transitions_iff2 st1 st2 c _))
-  (Admit).
+  (transitions_characterization_iff r st1 st2 c).
 
 Definition expand_pair {A B : Type} {P : A * B -> Type} {p : A * B}
   : P p -> P (fst p , snd p)
   := match p with pair a b => fun H => H end.
 
-Definition zero_not_in_annotated {A Γ r cs} : 
+Definition zero_not_in_annotated {A Γ r cs} :
   In_regex (annotate (Γ := Γ) r) (cs , 0) -> A :=
   fun H => match proj1 (In_bounded r 1 (cs , 0) H) eq_refl with end.
 
@@ -1328,54 +1236,7 @@ Definition interior_transitions_iff r lt1 st2 c
     (ex_intro _ lt1.(fst) (ex_intro _ cs2
      (conj (expand_pair (P := fun lt => In_f _ lt _) inf) c_in_cs2))))).
 
-(* definable from transitions_iff *)
-(* Definition compile_all_first_letters r
-    lt (H1 : LetterSet.S.In lt (p (annotate r)))
-    c (H2 : CharSet.In c lt.(fst))
-  : StateSet.In lt.(snd) (find_states c (compile r) 0) :=
-  match eq_sym (StateMap.find_1 (StateMap.add_1 _ _ eq_refl)) in _ = found
-  return
-    StateSet.In lt.(snd)
-    (match CharMap.find c
-     (match found with
-      | Some ss => flatten_transitions ss
-      | None => CharMap.empty _
-      end)
-     with Some ss => ss | None => StateSet.empty end)
-  with eq_refl =>
-    Admit
-    : StateSet.In (snd lt)
-      match CharMap.find c
-        (flatten_transitions (transition_map_of_letter_set (p (annotate r))))
-      with
-      | Some ss => ss
-      | None => StateSet.empty
-      end
-  end. *)
-(* as an example *)
-(* Definition compile_all_first_letters r
-    lt (H1 : In_p (annotate r) lt)
-    c (H2 : CharSet.In c lt.(fst))
-  : StateSet.In lt.(snd) (find_states c (compile r) 0) :=
-  proj2 (transitions_iff r 0 lt.(snd) c) (or_intror
-    (ex_intro _ lt.(fst) (conj
-      (expand_pair H1)
-      (conj H2 eq_refl)))). *)
-
-(* Definition accept_emp_iff_some_cur_state_final r cur
-  : (exists st, StateSet.In st cur /\ StateSet.In st (compile r).(finals)) <->
-    negb (StateSet.is_empty (StateSet.inter cur (compile r).(finals))) = true :=
-  conj
-  (fun '(ex_intro _ st (conj H1 H2)) =>
-   match StateSet.is_empty _ as b
-   return StateSet.is_empty _ = b -> negb b = true with
-   | false => fun _ => eq_refl
-   | true => fun H =>
-     match StateSet.is_empty_2 H (StateSet.inter_3 H1 H2) with end
-   end eq_refl)
-  (Admit). *)
-
-(* easy, if we get the conversions right *)
+(* Now we can prove that local_match iff there is a path through the NFA. *)
 Fixpoint local_inner_iff_NFA_path r s start
   (start_in_r : In_regex (annotate r) start) :
   local_inner r 1 s start <->
@@ -1424,13 +1285,12 @@ Definition local_match_iff_NFA_path_accept r s :
          (path : NFA_path _ _ s mid)))
   end.
 
-(* easy *)
+(* These two lemmas should be easy to prove, postponing until the end *)
 Axiom compile_NFA_start_single : forall r s,
   NFA_path (compile r).(next) (compile r).(finals) s 0 <->
   exists st, StateSet.In st (compile r).(start) /\
              NFA_path (compile r).(next) (compile r).(finals) s st.
 
-(* easy *)
 Axiom NFA_accept_path_iff
   : forall n s,
     (exists st, StateSet.In st n.(start) /\
