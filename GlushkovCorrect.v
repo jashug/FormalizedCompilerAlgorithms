@@ -52,6 +52,10 @@ Local Notation "'discriminate' p H" :=
    with eq_refl => I end)
   (at level 10, p pattern).
 
+Definition expand_pair {A B : Type} {P : A * B -> Type} {p : A * B}
+  : P p -> P (fst p , snd p)
+  := match p with pair a b => fun H => H end.
+
 Fixpoint string_app_emp (s : string) : s = (s ++ "")%string :=
   match s with
   | EmptyString => eq_refl
@@ -173,16 +177,21 @@ Fixpoint In_bounded {Γ} (r : regex Γ) i x :
     end
   | Star e => In_bounded e i x
   end.
+Definition In_annotate_exclusion2 {A Γ} {e f : regex Γ} {i x y1 y2}
+  (ae := (annotate_helper i e).(fst))
+  (af := (annotate_helper (annotate_helper i e).(snd) f).(fst)) :
+  In_regex ae (y1 , x) -> In_regex af (y2 , x) -> A :=
+  fun H1 H2 => match
+  match Z.le_decidable (annotate_helper i e).(snd) x return False with
+  | or_introl x_past_e => proj2 (In_bounded e i (_ , x) H1) x_past_e
+  | or_intror x_not_past_e => x_not_past_e (proj1 (In_bounded f _ (_ , x) H2))
+  end
+  with end.
 Definition In_annotate_exclusion {A Γ} {e f : regex Γ} {i x}
   (ae := (annotate_helper i e).(fst))
   (af := (annotate_helper (annotate_helper i e).(snd) f).(fst)) :
   In_regex ae x -> In_regex af x -> A :=
-  fun H1 H2 => match
-  match Z.le_decidable (annotate_helper i e).(snd) x.(snd) return False with
-  | or_introl x_past_e => proj2 (In_bounded e i x H1) x_past_e
-  | or_intror x_not_past_e => x_not_past_e (proj1 (In_bounded f _ x H2))
-  end
-  with end.
+  fun H1 H2 => In_annotate_exclusion2 (expand_pair H1) (expand_pair H2).
 
 Fixpoint unique_fst_in_annotate {Γ} (r : regex Γ) i (lt : Γ * state) cs'
   : In_regex (annotate_helper i r).(fst) lt ->
@@ -659,177 +668,98 @@ Fixpoint fold_left_inc_in {A B} {P : A -> Prop} {e : B -> B -> Prop}
      | InA_cons_tl y H' => fold_left_inc_in f _ _ IH b IH2 H'
      end.
 
-(* Definition LetterSet_prod_inc lt1 lt2 ls1 ls2 :
-  LetterSet.S.In lt1 ls1 -> LetterSet.S.In lt2 ls2 ->
-  Letter2Set.S.In (lt1 , lt2) (ls1 <*> ls2) :=
-  fun H1 H2 =>
-  match eq_sym (LetterSet.S.fold_1 ls1 _ _) in _ = res1
-  return Letter2Set.S.In (lt1 , lt2) res1
-  with eq_refl =>
-    fold_left_inc_in (P := Letter2Set.S.In (lt1 , lt2)) _ _ _
-    (fun s1 _ H => Letter2Set.S.union_3 _ H)
-    _ (fun _ lt1' lt1eq => Letter2Set.S.union_2 _
-      match eq_sym (LetterSet.S.fold_1 ls2 _ _) in _ = res2
-      return Letter2Set.S.In (lt1 , lt2) res2
-      with eq_refl =>
-        fold_left_inc_in (P := Letter2Set.S.In (lt1 , lt2)) _ _ _
-        (fun _ _ H => Letter2Set.S.union_3 _ H)
-        _ (fun _ lt2' lt2eq => Letter2Set.S.union_2 _
-           (Letter2Set.S.singleton_2 (x := (lt1' , lt2')) (y := (lt1 , lt2))
-            (conj (eq_sym lt1eq) (eq_sym lt2eq))))
-        (LetterSet.S.elements_1 H2)
-      end)
-    (LetterSet.S.elements_1 H1)
-  end. *)
-
 (* characterize final states and transitions: *)
 
-Axiom d_positions_pred_iff :
-  forall r i (ar := (annotate_helper i r).(fst)) state,
-  StateSet.In state (positions (d ar)) <->
-  (exists cs, In_d ar (cs , state)).
-(* This should probably be broken up *)
-(* Definition d_positions_pred_iff r i (ar := (annotate_helper i r).(fst)) state :
+Fixpoint In_d_iff r {i} st cs :
+  let ar := (annotate_helper i r).(fst) in
+  StateMap.MapsTo st cs (d ar) <-> In_d ar (cs , st) :=
+  match r with
+  | Empty | Eps => StateMapP.F.empty_mapsto_iff _ _
+  | Char c => match Z.eq_dec i st with
+    | left e => conj
+      (fun H => let e2 := StateMapP.F.MapsTo_fun (StateMap.add_1 _ _ e) H in
+       match e with eq_refl =>
+         match e2 : c = cs with eq_refl => eq_refl
+       end end)
+      (fun H : (c , i) = (cs , st) =>
+       match H in _ = rhs return StateMap.MapsTo st rhs.(fst) _
+       with eq_refl => StateMap.add_1 _ _ (f_equal snd H) end)
+    | right ne => conj
+      (fun H => match StateMap.empty_1 (StateMap.add_3 ne H) with end)
+      (fun H : (c , i) = (cs , st) => match ne (f_equal snd H) with end)
+    end
+  | Alt e f => iff_trans (StateMapP.update_mapsto_iff (d _) (d _) st cs) (conj
+    (fun H => match H with
+     | or_introl in_f => or_intror (proj1 (In_d_iff f _ _) in_f)
+     | or_intror (conj in_e _) => or_introl (proj1 (In_d_iff e _ _) in_e)
+     end)
+    (fun H => match H with
+     | or_introl in_e => let in_e' := proj2 (In_d_iff e _ _) in_e in
+       or_intror (conj in_e'
+       (fun '(ex_intro _ _ in_f : StateMap.In st (d _)) =>
+        In_annotate_exclusion2
+        (In_d_all in_e) (In_d_all (proj1 (In_d_iff f _ _) in_f))))
+     | or_intror in_f => or_introl (proj2 (In_d_iff f _ _) in_f)
+     end))
+  | Seq e f => iff_trans (StateMapP.update_mapsto_iff _ _ st cs)
+    (match l _ as b
+    return
+      _ = b ->
+      _ \/ StateMap.MapsTo st cs (if b then _ else _) /\ _ <->
+      (b = true /\ _ \/ _)
+    with
+    | true => fun f_emp => (conj
+      (fun H => match H with
+       | or_introl in_f => or_intror (proj1 (In_d_iff f _ _) in_f)
+       | or_intror (conj in_e _) => or_introl (conj eq_refl
+         (proj1 (In_d_iff e _ _) in_e))
+       end)
+      (fun H => match H with
+       | or_introl (conj _ in_e) => or_intror (conj
+         (proj2 (In_d_iff e _ _) in_e)
+         (fun '(ex_intro _ _ in_f : StateMap.In st (d _)) =>
+          In_annotate_exclusion2
+          (In_d_all in_e) (In_d_all (proj1 (In_d_iff f _ _) in_f))))
+       | or_intror in_f => or_introl (proj2 (In_d_iff f _ _) in_f)
+       end))
+    | false => fun f_not_emp => (conj
+      (fun H => match H with
+       | or_introl in_f => or_intror (proj1 (In_d_iff f _ _) in_f)
+       | or_intror (conj in_e _) => match StateMap.empty_1 in_e with end
+       end)
+      (fun H => match H with
+       | or_introl (conj f_emp _) => discriminate false (f_emp : false = true)
+       | or_intror in_f => or_introl (proj2 (In_d_iff f _ _) in_f)
+       end))
+    end eq_refl)
+  | Star e => In_d_iff e _ _
+  end.
+Definition d_positions_pred_iff r (ar := annotate r) state :
   StateSet.In state (positions (d ar)) <->
   (exists cs, In_d ar (cs , state)) :=
-  iff_trans (B := exists cs, LetterSet.S.In (cs , state) (d ar))
-  (match eq_sym (* (LetterSet.S.fold_1 _ _ _) *)_ in _ = pos
-   return StateSet.In _ pos <-> _ with eq_refl =>
-     iff_trans
-       (B := exists cs, InA Letter.eq (cs , state)
-                        (LetterSet.S.elements (d ar)))
-       (let fix rec l cur
-        : StateSet.In state
-            (fold_left (fun cur x => StateSet.add x.(snd) cur) l cur) <->
-          StateSet.In state cur \/ exists cs, InA Letter.eq (cs , state) l
-        := match l
-           return
-             StateSet.In state
-               (fold_left (fun cur x => StateSet.add x.(snd) cur) l cur) <->
-             StateSet.In state cur \/ exists cs, InA Letter.eq (cs , state) l
-           with
-           | nil => conj
-             (fun H => or_introl H)
-             (fun H => match H with
-              | or_introl H => H
-              | or_intror (ex_intro _ _ H) =>
-                match proj1 (InA_nil _ _) H with end
-              end)
-           | cons x l =>
-             iff_trans (rec l (StateSet.add x.(snd) cur))
-             (conj
-              (fun H => match H with
-               | or_introl H => match Z.eq_dec x.(snd) state with
-                 | left e => or_intror (ex_intro _ x.(fst)
-                   (InA_cons_hd l (eq_sym e : snd (_ , state) = snd x)))
-                 | right ne => or_introl (StateSet.add_3 ne H)
-                 end
-               | or_intror (ex_intro _ cs H) =>
-                 or_intror (ex_intro _ cs (InA_cons_tl x H))
-               end)
-              (fun H => match H with
-               | or_introl H => or_introl (StateSet.add_2 _ H)
-               | or_intror (ex_intro _ cs H) =>
-                 match Z.eq_dec x.(snd) state with
-                 | left e => or_introl (StateSet.add_1 _ e)
-                 | right ne => or_intror (ex_intro _ cs
-                   match proj1 (InA_cons _ _ _ _) H with
-                   | or_introl e =>
-                     match (ne : snd x <> state) (eq_sym e) with end
-                   | or_intror H => H
-                   end)
-                 end
-               end))
-           end in
-        iff_trans (rec (LetterSet.S.elements (d ar)) StateSet.empty)
-        (conj
-         (fun H => match H with
-          | or_introl H => match StateSet.empty_1 H with end
-          | or_intror H => H
-          end)
-         (fun H => or_intror H)))
-       (conj
-        (fun '(ex_intro _ cs H) =>
-         ex_intro (fun cs => _ (cs , _) _) cs (* (LetterSet.S.elements_2 H) *)_)
-        (fun '(ex_intro _ cs H) =>
-         ex_intro (fun cs => _ _ (cs , _) _) cs (* (LetterSet.S.elements_1 H) *)_))
-   end)
-  (let fix rec r i (ar := (annotate_helper i r).(fst))
-    : (exists cs, StateMap.MapsTo state cs (d ar)) <->
-      (exists cs, In_d ar (cs , state))
-    := match r
-       return
-         let ar := (annotate_helper i r).(fst) in
-         (exists cs, StateMap.MapsTo state cs (d ar)) <->
-         (exists cs, In_d ar (cs , state))
-       with
-       | Empty | Eps => conj
-         (fun '(ex_intro _ cs H) => ex_intro _ cs (StateMap.empty_1 H))
-         (fun '(ex_intro _ _ H) => match H : False with end)
-       | Char cs => conj
-         (fun '(ex_intro _ _ H) =>
-          let H2 : i = state
-           := (* LetterSet.S.singleton_1 H *)_ : snd (_ , _) = snd (_ , _) in
-          ex_intro _ cs (f_equal (pair cs) H2))
-         (fun '(ex_intro _ cs' H) =>
-          ex_intro _ cs' (* (LetterSet.S.singleton_2 (f_equal snd H)) *)_)
-       | Alt e f => conj
-         (fun '(ex_intro _ cs H) =>
-          match (* LetterSet.S.union_1 H *)_ with
-          | or_introl H =>
-            let '(ex_intro _ cs' H)
-             := proj1 (rec e _) (ex_intro (fun cs => _ (cs , _) _) cs H) in
-            ex_intro _ cs' (or_introl H)
-          | or_intror H =>
-            let '(ex_intro _ cs' H)
-             := proj1 (rec f _) (ex_intro (fun cs => _ (cs , _) _) cs H) in
-            ex_intro _ cs' (or_intror H)
-          end)
-         (fun '(ex_intro _ cs H) => match H with
-          | or_introl H =>
-            let '(ex_intro _ cs' H)
-             := proj2 (rec e _) (ex_intro (fun cs => In_d _ (cs , _)) cs H) in
-            ex_intro _ cs' (* (LetterSet.S.union_2 _ H) *)_
-          | or_intror H =>
-            let '(ex_intro _ cs' H)
-             := proj2 (rec f _) (ex_intro (fun cs => In_d _ (cs , _)) cs H) in
-            ex_intro _ cs' (* (LetterSet.S.union_3 _ H) *)_
-          end)
-       | Seq e f => conj
-         (fun '(ex_intro _ cs H) =>
-          match (* LetterSet.S.union_1 H *)_ with
-          | or_introl H =>
-            match l _ as b
-            return l _ = b -> StateMap.MapsTo _ _ (if b then _ else _) -> _
-            with
-            | false => fun _ H => match (* LetterSet.S.empty_1 H *)_ with end
-            | true => fun f_emp H =>
-              let '(ex_intro _ cs' H)
-               := proj1 (rec e _) (ex_intro (fun cs => _ (cs , _) _) cs H) in
-              ex_intro _ cs' (or_introl (conj f_emp H))
-            end eq_refl H
-          | or_intror H =>
-            let '(ex_intro _ cs' H)
-             := proj1 (rec f _) (ex_intro (fun cs => _ (cs , _) _) cs H) in
-            ex_intro _ cs' (or_intror H)
-          end)
-         (fun '(ex_intro _ cs H) =>
-          match H with
-          | or_introl (conj f_emp H) =>
-            let '(ex_intro _ cs' H)
-             := proj2 (rec e _) (ex_intro (fun cs => In_d _ (cs , _)) cs H) in
-            ex_intro _ cs' (* (LetterSet.S.union_2 _
-            match eq_sym f_emp : true = _ in _ = b
-            return LetterSet.S.In _ (if b then _ else _)
-            with eq_refl => H end) *)_
-          | or_intror H =>
-            let '(ex_intro _ cs' H)
-             := proj2 (rec f _) (ex_intro (fun cs => In_d _ (cs , _)) cs H) in
-            ex_intro _ cs' (* (LetterSet.S.union_3 _ H) *)_
-          end)
-       | Star e => rec e i
-       end in
-   rec r i). *)
+  iff_trans (B := StateMap.In state (d ar))
+  (StateMapP.fold_rec_bis
+   (P := fun d acc =>
+    StateSet.In state acc <-> exists cs, StateMap.MapsTo state cs d)
+   (fun d1 d2 acc deq H => iff_trans H (StateMapP.F.In_m eq_refl deq))
+   (conj
+    (fun H => match StateSet.empty_1 H with end)
+    (fun '(ex_intro _ cs H) => match StateMap.empty_1 H with end))
+   (fun st cs acc d _ _ IH => match Z_as_OT.eq_dec st state with
+    | left e => conj
+      (fun _ => ex_intro _ cs (StateMap.add_1 _ _ e))
+      (fun _ => StateSet.add_1 _ e)
+    | right ne => conj
+      (fun H => let '(ex_intro _ cs H) := proj1 IH (StateSet.add_3 ne H) in
+       ex_intro _ cs (StateMap.add_2 _ ne H))
+      (fun '(ex_intro _ cs H) =>
+       let H := proj2 IH (ex_intro (fun cs => StateMap.MapsTo _ cs _)
+                          cs (StateMap.add_3 ne H)) in
+       StateSet.add_2 _ H)
+    end)(* simplify by working with StateMap.In *))
+  (conj
+   (fun '(ex_intro _ cs H) => ex_intro _ cs (proj1 (In_d_iff _ _ _) H))
+   (fun '(ex_intro _ cs H) => ex_intro _ cs (proj2 (In_d_iff _ _ _) H))).
 
 (*
 Here we characterize the final states of (compile r) as either states which
@@ -843,7 +773,7 @@ Definition finals_iff r state :
   (let state_to_letter_d
     : StateSet.In state (positions (d (annotate r))) ->
       exists cs, In_d (annotate r) (cs , state)
-    := proj1 (d_positions_pred_iff r _ state) in
+    := proj1 (d_positions_pred_iff r state) in
    match l (annotate r) as b
    return StateSet.In state (if b then _ else _) -> _ \/ b = true /\ _ with
    | true => match Z.eq_dec 0 state with
@@ -858,7 +788,7 @@ Definition finals_iff r state :
   (fun H => match H with
    | or_introl H =>
      let H2 : StateSet.In state _
-      := proj2 (d_positions_pred_iff r _ state) H in
+      := proj2 (d_positions_pred_iff r state) H in
      match l (annotate r) as b return StateSet.In state (if b then _ else _)
      with true => StateSet.add_2 _ H2 | false => H2 end
    | or_intror (conj r_emp st0) =>
@@ -1169,10 +1099,6 @@ Definition transitions_iff r st1 st2 c :
   (unwrap_defaults st1 st2 c _ flatten_transitions)
   (flatten_transitions_iff2 st1 st2 c _))
   (transitions_characterization_iff r st1 st2 c).
-
-Definition expand_pair {A B : Type} {P : A * B -> Type} {p : A * B}
-  : P p -> P (fst p , snd p)
-  := match p with pair a b => fun H => H end.
 
 Definition zero_not_in_annotated {A Γ r cs} :
   In_regex (annotate (Γ := Γ) r) (cs , 0) -> A :=
